@@ -1,0 +1,63 @@
+# 头文件目录说明
+
+This directory is intended for project header files.
+
+这里放的是所有项目的"说明书"文件（`.h` 文件）。
+
+A header file is a file containing C declarations and macro definitions
+
+## 文件说明to be shared between several project source files. You request the use of a
+
+header file in your project source file (C, C++, etc) located in `src` folder
+
+| 文件名 | 作用 |by including it, with the C preprocessing directive `#include'.
+
+|--------|------|
+
+| **config.h** | 所有的硬件参数和配置（WiFi 密码、引脚、MQTT 地址等） |```src/main.c
+
+| **sensor.h** | 温湿度传感器说明书 |
+
+| **wifi_manager.h** | WiFi 连接说明书 |#include "header.h"
+
+| **mqtt_manager.h** | MQTT 云通讯说明书 |
+
+| **relay_control.h** | 继电器控制说明书 |int main (void)
+
+| **condition_control.h** | 自动判断规则说明书 |{
+
+| **web_server.h** | 网页配置说明书 | ...
+
+| **lora_manager.h** | LoRa 远距离通讯说明书 |}
+
+| **system_monitor.h** | 系统监控说明书 |```
+
+
+
+## 简单理解Including a header file produces the same results as copying the header file
+
+into each source file that needs it. Such copying would be time-consuming
+
+`.h` 文件就像 **LEGO 积木的说明书**：and error-prone. With a header file, the related declarations appear
+
+- 告诉你有哪些"零件"（函数、变量）in only one place. If they need to be changed, they can be changed in one
+
+- 告诉你这些零件怎么用place, and programs that include the header file will automatically use the
+
+- `.cpp` 文件再去实际用这些零件new version when next recompiled. The header file eliminates the labor of
+
+finding and changing all the copies as well as the risk that a failure to
+
+你通常只需要改 **config.h** 里的参数（WiFi、密码、引脚等）。其他的一般不用动。find one copy will result in inconsistencies within a program.
+
+
+In C, the convention is to give header files names that end with `.h'.
+
+Read more about using header files in official GCC documentation:
+
+* Include Syntax
+* Include Operation
+* Once-Only Headers
+* Computed Includes
+
+https://gcc.gnu.org/onlinedocs/cpp/Header-Files.html

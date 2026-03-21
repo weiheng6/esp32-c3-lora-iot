@@ -1,0 +1,57 @@
+# 库文件目录
+
+This directory is intended for project specific (private) libraries.
+
+这里放的是本地库文件（如果要自己添加库的话）。PlatformIO will compile them to static libraries and link into the executable file.
+
+
+
+## 简单说The source code of each library should be placed in a separate directory
+
+("lib/your_library_name/[Code]").
+
+**目前这个文件夹是空的。** 所有需要的库都从网络上下载了。
+
+For example, see the structure of the following example libraries `Foo` and `Bar`:
+
+## 如果以后要添加本地库...
+
+|--lib
+
+比如你自己写了一个温度计算库，可以放在这里。但大多数情况下，都是用网络上已经有的库，不用自己放这里。|  |
+
+|  |--Bar
+|  |  |--docs
+|  |  |--examples
+|  |  |--src
+|  |     |- Bar.c
+|  |     |- Bar.h
+|  |  |- library.json (optional. for custom build options, etc) https://docs.platformio.org/page/librarymanager/config.html
+|  |
+|  |--Foo
+|  |  |- Foo.c
+|  |  |- Foo.h
+|  |
+|  |- README --> THIS FILE
+|
+|- platformio.ini
+|--src
+   |- main.c
+
+Example contents of `src/main.c` using Foo and Bar:
+```
+#include <Foo.h>
+#include <Bar.h>
+
+int main (void)
+{
+  ...
+}
+
+```
+
+The PlatformIO Library Dependency Finder will find automatically dependent
+libraries by scanning project source files.
+
+More information about PlatformIO Library Dependency Finder
+- https://docs.platformio.org/page/librarymanager/ldf.html

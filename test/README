@@ -1,0 +1,22 @@
+# 测试目录
+
+This directory is intended for PlatformIO Test Runner and project tests.
+
+这个文件夹是用来放单元测试的（如果要自己编写测试的话）。
+
+Unit Testing is a software testing method by which individual units of
+
+## 简单说source code, sets of one or more MCU program modules together with associated
+
+control data, usage procedures, and operating procedures, are tested to
+
+**目前不需要关注这个文件夹。**determine whether they are fit for use. Unit testing finds problems early
+
+in the development cycle.
+
+## 如果以后要做单元测试...
+
+More information about PlatformIO Unit Testing:
+
+在这里创建 `test_*.cpp` 文件，用来测试各个功能是否正常工作。但这是高级的事情，新手不用管。- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
