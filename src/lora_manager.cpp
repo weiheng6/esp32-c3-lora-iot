@@ -67,13 +67,21 @@ void LoRaManager::processQueue() {
     return;
   }
   
+  unsigned long loraStart = millis();
+  
   String message = queue[0].message;
   lastSentMessage = message;
   
   LoRa.beginPacket();
   LoRa.print(message);
   LoRa.endPacket();
-  Serial.printf("📤 已发送 LoRa 消息：%s\n", message.c_str());
+  
+  unsigned long loraDuration = millis() - loraStart;
+  Serial.printf("📤 已发送 LoRa 消息：%s (耗时：%lu ms)\n", message.c_str(), loraDuration);
+  
+  if (loraDuration > 50) {
+    Serial.printf("⚠️  LoRa 发送耗时过长：%lu ms\n", loraDuration);
+  }
   
   lastSendTime = millis();
   
@@ -84,8 +92,15 @@ void LoRaManager::processQueue() {
 }
 
 String LoRaManager::receiveMessage() {
+  unsigned long loraRxStart = millis();
   String message = "";
   int packetSize = LoRa.parsePacket();
+  unsigned long loraRxDuration = millis() - loraRxStart;
+  
+  // 监测 LoRa parsePacket 耗时
+  if (loraRxDuration > 20) {
+    Serial.printf("⚠️  LoRa parsePacket 耗时过长：%lu ms\n", loraRxDuration);
+  }
   
   if (packetSize) {
     while (LoRa.available()) {
@@ -93,7 +108,7 @@ String LoRaManager::receiveMessage() {
     }
     
     if (message != lastSentMessage) {
-      Serial.printf("📥 已接收 LoRa 消息：%s\n", message.c_str());
+      Serial.printf("📥 已接收 LoRa 消息：%s (耗时：%lu ms)\n", message.c_str(), loraRxDuration);
       return message;
     } else {
       Serial.println("📭 忽略自己发送的 LoRa 消息");

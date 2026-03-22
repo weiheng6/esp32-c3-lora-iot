@@ -35,12 +35,24 @@ unsigned long lastNodeDiscoveryTime = 0;
 unsigned long lastHeartbeatTime = 0;
 unsigned long lastMqttConnectAttempt = 0;
 
+// 诊断计数器
+static uint32_t i2cFailureCount = 0;
+static uint32_t mqttFailureCount = 0;
+static uint32_t loopSlowCount = 0;  // 100ms+ 的 loop 计数
+static unsigned long lastLoopDuration = 0;
+static unsigned long lastI2CResetTime = 0;
+static uint32_t i2cResetCount = 0;  // I2C 总线复位计数
+
 // MQTT 重连机制配置
 #define MQTT_RECONNECT_INTERVAL 5000  // 5秒重连一次
 #define MQTT_RECONNECT_MAX_INTERVAL 60000  // 最多等60秒
 
 // ==================== MQTT 消息回调 ====================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  #if DEBUG_MODE
+  unsigned long callbackStart = millis();
+  #endif
+  
   if (length > 500) {
     Serial.println("❌ 指令长度超过限制");
     return;
@@ -129,14 +141,65 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     delay(2000);
     ESP.restart();
   }
+  
+  #if DEBUG_MODE
+  unsigned long callbackDuration = millis() - callbackStart;
+  if (callbackDuration > 50) {
+    Serial.printf("⚠️  MQTT callback 耗时过长：%lu ms\n", callbackDuration);
+  }
+  #endif
 }
 
 // ==================== 检查网络连接 ====================
 void checkNetworkConnection() {
   bool wifiConnected = (WiFi.status() == WL_CONNECTED);
   bool mqttConnected = mqttManager.isConnected();
+  bool oldNetworkConnection = hasNetworkConnection;
   
   hasNetworkConnection = wifiConnected && mqttConnected;
+  
+  // 定期 I2C 总线复位检查（每 5 分钟或者发生多次慢循环时）
+  static unsigned long lastI2CHealthCheck = 0;
+  if (millis() - lastI2CHealthCheck > 300000) {  // 5 分钟一次
+    lastI2CHealthCheck = millis();
+    
+    // 如果检测到大量慢循环（可能 I2C 卡住），执行复位
+    if (loopSlowCount > 100) {
+      Serial.println("⚠️⚠️ 检测到大量慢循环，执行 I2C 总线复位...");
+      // I2C 总线复位
+      Wire.end();
+      delay(10);
+      Wire.begin(SHT31_I2C_SDA, SHT31_I2C_SCL);
+      Wire.setClock(400000);
+      delay(10);
+      i2cResetCount++;
+      loopSlowCount = 0;  // 重置计数器
+      Serial.printf("✅ I2C 总线已复位（第 %lu 次）\n", i2cResetCount);
+    }
+  }
+  
+  // 详细的网络状态诊断
+  static unsigned long lastNetStatusLog = 0;
+  if (millis() - lastNetStatusLog > 30000) {  // 每 30 秒输出一次
+    lastNetStatusLog = millis();
+    int wifiRssi = WiFi.RSSI();
+    Serial.printf("🌐 网络状态诊断:\n");
+    Serial.printf("   WiFi: %s (RSSI: %d dBm, 状态码: %d)\n", 
+                  wifiConnected ? "✅ 已连接" : "❌ 未连接", wifiRssi, WiFi.status());
+    Serial.printf("   MQTT: %s\n", mqttConnected ? "✅ 已连接" : "❌ 未连接");
+    Serial.printf("   综合: %s\n", hasNetworkConnection ? "✅ 网络可用" : "⚠️  网络不可用");
+    Serial.printf("   I2C复位次数: %lu\n", i2cResetCount);
+  }
+  
+  // 状态变化时立即告警
+  if (oldNetworkConnection != hasNetworkConnection) {
+    if (hasNetworkConnection) {
+      Serial.println("✅ 网络已恢复连接！");
+    } else {
+      Serial.printf("❌ 网络连接断开 (WiFi: %s, MQTT: %s)\n", 
+                    wifiConnected ? "✅" : "❌", mqttConnected ? "✅" : "❌");
+    }
+  }
   
   if (hasNetworkConnection) {
     deviceStatus = STATUS_ONLINE_WITH_NETWORK;
@@ -151,7 +214,15 @@ void checkNetworkConnection() {
 void acquireSensorData() {
   float temperature, humidity;
   
+  unsigned long sensorReadStart = millis();
   if (sensorManager.readBoth(temperature, humidity)) {
+    unsigned long sensorReadDuration = millis() - sensorReadStart;
+    
+    // 监测 I2C 读取时间
+    if (sensorReadDuration > 10) {
+      Serial.printf("⚠️  I2C 读取耗时过长：%lu ms\n", sensorReadDuration);
+    }
+    
     Serial.print("🔍 本地采集 - 温度：");
     Serial.print(temperature);
     Serial.print(" °C\t湿度：");
@@ -164,6 +235,11 @@ void acquireSensorData() {
     } else {
       relayControl.turnOff();
     }
+  } else {
+    i2cFailureCount++;
+    if (i2cFailureCount % 10 == 0) {
+      Serial.printf("❌ I2C 读取失败次数：%lu\n", i2cFailureCount);
+    }
   }
 }
 
@@ -171,6 +247,35 @@ void acquireSensorData() {
 void reportSensorDataToMqtt() {
   float temperature, humidity;
   
+  // 1. 首先检查网络连接状态
+  if (!hasNetworkConnection) {
+    // 详细诊断为什么网络不可用
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    bool mqttConnected = mqttManager.isConnected();
+    
+    static unsigned long lastNetworkFailLog = 0;
+    if (millis() - lastNetworkFailLog > 60000) {  // 60 秒内最多输出一次
+      lastNetworkFailLog = millis();
+      Serial.printf("⚠️  网络连接不可用（WiFi:%s, MQTT:%s）\n", 
+                    wifiConnected ? "✅" : "❌", mqttConnected ? "✅" : "❌");
+      if (!wifiConnected) {
+        Serial.printf("   → WiFi 状态码：%d (期望: %d)\n", WiFi.status(), WL_CONNECTED);
+      }
+      if (!mqttConnected) {
+        Serial.println("   → MQTT 未连接，需要重新连接");
+      }
+    }
+    return;
+  }
+  
+  // 2. 检查 WiFi 信号强度（< -70dBm 时跳过上报）
+  int rssi = WiFi.RSSI();
+  if (rssi < -70) {
+    Serial.printf("⚠️  WiFi 信号弱（%d dBm），跳过 MQTT 上报\n", rssi);
+    return;
+  }
+  
+  // 3. 读取传感器数据
   if (sensorManager.readBoth(temperature, humidity)) {
     Serial.print("📤 MQTT 上报 - 温度：");
     Serial.print(temperature);
@@ -183,12 +288,24 @@ void reportSensorDataToMqtt() {
     dtostrf(temperature, 4, 2, tempStr);
     dtostrf(humidity, 4, 2, humStr);
     
-    // 检查发送结果
+    // 4. 尝试发送数据
+    unsigned long mqttSendStart = millis();
     bool tempPublished = mqttManager.publish(mqttManager.getTempTopic(), tempStr);
     bool humPublished = mqttManager.publish(mqttManager.getHumTopic(), humStr);
+    unsigned long mqttSendDuration = millis() - mqttSendStart;
     
+    // 5. 监测 MQTT 发送时间
+    if (mqttSendDuration > 10) {
+      Serial.printf("⚠️  MQTT 发送耗时：%lu ms\n", mqttSendDuration);
+    }
+    
+    // 6. 记录发送失败
     if (!tempPublished || !humPublished) {
-      Serial.println("❌ MQTT 发送失败！连接可能已断开，即将重连...");
+      mqttFailureCount++;
+      if (mqttFailureCount % 10 == 0) {
+        Serial.printf("❌ MQTT 发送失败次数：%lu (temp:%s, hum:%s)\n", 
+                      mqttFailureCount, tempPublished ? "✅" : "❌", humPublished ? "✅" : "❌");
+      }
     }
   }
 }
@@ -233,18 +350,24 @@ void setup() {
 
 // ==================== Loop 函数 ====================
 void loop() {
-  unsigned long currentTime = millis();
+  unsigned long loopStart = millis();
+  unsigned long currentTime = loopStart;
   
   // 检查网络连接
+  unsigned long step1Start = millis();
   checkNetworkConnection();
+  unsigned long step1Duration = millis() - step1Start;
   
   // 定期检查 WiFi
+  unsigned long step2Start = millis();
   if (currentTime - lastWifiCheckTime >= WIFI_CHECK_INTERVAL) {
     lastWifiCheckTime = currentTime;
     wifiManager.connect();
   }
+  unsigned long step2Duration = millis() - step2Start;
   
   // 连接 MQTT（带重连机制）
+  unsigned long step3Start = millis();
   if (!mqttManager.isConnected() && WiFi.status() == WL_CONNECTED) {
     if (currentTime - lastMqttConnectAttempt >= MQTT_RECONNECT_INTERVAL) {
       lastMqttConnectAttempt = currentTime;
@@ -255,29 +378,41 @@ void loop() {
     // 连接成功，重置重连时间（这样断开后立即尝试重连）
     lastMqttConnectAttempt = 0;
   }
+  unsigned long step3Duration = millis() - step3Start;
   
   // MQTT 循环
+  unsigned long step4Start = millis();
   mqttManager.loop();
+  unsigned long step4Duration = millis() - step4Start;
   
   // 处理 HTTP 请求
+  unsigned long step5Start = millis();
   webServerManager.handleClient();
+  unsigned long step5Duration = millis() - step5Start;
   
   // 处理 LoRa 消息
+  unsigned long step6Start = millis();
   String loraMessage = loraManager.receiveMessage();
   if (loraMessage.length() > 0) {
     loraManager.parseMessage(loraMessage);
   }
+  unsigned long step6Duration = millis() - step6Start;
   
   // 处理 LoRa 队列
+  unsigned long step7Start = millis();
   loraManager.processQueue();
+  unsigned long step7Duration = millis() - step7Start;
   
   // 定期采集传感器数据
+  unsigned long step8Start = millis();
   if (currentTime - lastAcquisitionTime >= DEFAULT_ACQUISITION_INTERVAL) {
     lastAcquisitionTime = currentTime;
     acquireSensorData();
   }
+  unsigned long step8Duration = millis() - step8Start;
   
   // 定期上报数据到 MQTT
+  unsigned long step9Start = millis();
   if (currentTime - lastMqttReportTime >= DEFAULT_MQTT_REPORT_INTERVAL || needReport) {
     lastMqttReportTime = currentTime;
     
@@ -289,8 +424,10 @@ void loop() {
     
     needReport = false;
   }
+  unsigned long step9Duration = millis() - step9Start;
   
   // 定期输出系统状态和内存监控
+  unsigned long step10Start = millis();
   if (currentTime - lastNodeDiscoveryTime >= SYSTEM_STATS_INTERVAL) {
     lastNodeDiscoveryTime = currentTime;
     systemMonitor.printStats();
@@ -303,13 +440,33 @@ void loop() {
     Serial.printf("💾 内存状态 - 可用：%lu 字节，使用率：%.1f%%，警告线：%d 字节\n", 
                   freeHeap, usagePercent, MEM_THRESHOLD);
   }
+  unsigned long step10Duration = millis() - step10Start;
   
   // LoRa 节点发现
+  unsigned long step11Start = millis();
   if (currentTime - lastHeartbeatTime >= LORA_NODE_DISCOVERY_INTERVAL) {
     lastHeartbeatTime = currentTime;
     loraManager.sendDiscovery(String(mqttManager.getDeviceId()), hasNetworkConnection);
   }
+  unsigned long step11Duration = millis() - step11Start;
   
-  // 小延迟避免看门狗重启
-  delay(10);
+  // 小延迟避免看门狗重启，并给系统任务（WiFi、蓝牙等）足够的 CPU 时间
+  delay(20);  // 20ms 延迟
+  
+  // 诊断：精准失败计数和异常检测（取消冗长树形输出）
+  lastLoopDuration = millis() - loopStart;
+  
+  if (lastLoopDuration > 100) {
+    loopSlowCount++;
+    Serial.printf("⚠️  慢循环 #%lu: %lu ms （I2C失败x%lu, MQTT失败x%lu）\n", 
+                  loopSlowCount, lastLoopDuration, i2cFailureCount, mqttFailureCount);
+  }
+  
+  // 每 30 秒输出一次汇总
+  static unsigned long lastSummaryTime = 0;
+  if (millis() - lastSummaryTime > 30000) {
+    lastSummaryTime = millis();
+    Serial.printf("📊 30秒汇总: 平均循环时间=%lu ms, 慢循环=%lu, I2C失败=%lu, MQTT失败=%lu\n", 
+                  lastLoopDuration, loopSlowCount, i2cFailureCount, mqttFailureCount);
+  }
 }

@@ -86,7 +86,14 @@ void MQTTManager::connect() {
 
 void MQTTManager::loop() {
   if (mqttClient.connected()) {
+    unsigned long mqttLoopStart = millis();
     mqttClient.loop();
+    unsigned long mqttLoopDuration = millis() - mqttLoopStart;
+    
+    // 监测 MQTT loop 耗时
+    if (mqttLoopDuration > 100) {
+      Serial.printf("⚠️  MQTT loop 耗时过长：%lu ms\n", mqttLoopDuration);
+    }
   }
 }
 
@@ -95,10 +102,37 @@ bool MQTTManager::isConnected() const {
 }
 
 bool MQTTManager::publish(const char* topic, const char* payload, bool retain) {
+  // 1. 检查 MQTT 连接
   if (!mqttClient.connected()) {
     return false;
   }
-  return mqttClient.publish(topic, payload, retain);
+  
+  // 2. 检查 WiFi 信号强度（-70 dBm 以下不发送）
+  int rssi = WiFi.RSSI();
+  if (rssi < -70) {
+    Serial.printf("⚠️  WiFi 信号弱（%d dBm），延迟 MQTT 发布\n", rssi);
+    return false;  // 返回 false，上层会在下个周期重试
+  }
+  
+  // 3. 检查 MQTT 缓冲区大小（PubSubClient 默认缓冲 256 字节）
+  // 如果 payload 接近缓冲区大小，延迟发送
+  size_t payloadLen = strlen(payload);
+  if (payloadLen > 200) {
+    Serial.printf("⚠️  MQTT payload 过大（%lu 字节），可能导致缓冲溢出\n", payloadLen);
+    return false;
+  }
+  
+  // 4. 尝试发布
+  unsigned long publishStart = millis();
+  bool result = mqttClient.publish(topic, payload, retain);
+  unsigned long publishDuration = millis() - publishStart;
+  
+  // 5. 监测发布时间
+  if (publishDuration > 5) {
+    Serial.printf("⚠️  MQTT 发布耗时 %lu ms\n", publishDuration);
+  }
+  
+  return result;
 }
 
 void MQTTManager::setCallback(std::function<void(char*, byte*, unsigned int)> callback) {

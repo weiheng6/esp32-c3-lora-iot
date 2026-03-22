@@ -20,7 +20,14 @@ void WebServerManager::begin() {
 
 void WebServerManager::handleClient() {
   if (started) {
+    unsigned long webServerStart = millis();
     server.handleClient();
+    unsigned long webServerDuration = millis() - webServerStart;
+    
+    // 监测 WebServer 处理耗时
+    if (webServerDuration > 50) {
+      Serial.printf("⚠️  WebServer handleClient 耗时过长：%lu ms\n", webServerDuration);
+    }
   }
 }
 
@@ -140,10 +147,22 @@ void WebServerManager::handleScanWiFi() {
     WiFi.mode(WIFI_AP_STA);
   }
   
-  int n = WiFi.scanNetworks();
+  // 使用异步扫描模式，不会阻塞主线程
+  Serial.println("🔍 开始异步 WiFi 扫描...");
+  int n = WiFi.scanNetworks(true, false);  // async=true, show_hidden=false
+  
+  // 等待扫描完成（最多等待 200ms）
+  int maxWait = 20;  // 20 * 10ms = 200ms
+  while (WiFi.scanComplete() < 0 && maxWait-- > 0) {
+    delay(10);  // 短延迟给扫描任务执行时间
+  }
+  
+  n = WiFi.scanComplete();
+  
   String json = "[";
   
-  for (int i = 0; i < n; i++) {
+  // 限制返回的网络数量，避免 JSON 过大
+  for (int i = 0; i < n && i < 20; i++) {
     if (i > 0) {
       json += ",";
     }
@@ -151,6 +170,8 @@ void WebServerManager::handleScanWiFi() {
   }
   
   json += "]";
+  
+  Serial.printf("✅ WiFi 扫描完成，找到 %d 个网络\n", n);
   
   if (currentMode == WIFI_AP) {
     WiFi.mode(WIFI_AP);
