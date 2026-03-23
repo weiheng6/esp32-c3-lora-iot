@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include "config.h"
 #include "sensor.h"
 #include "wifi_manager.h"
@@ -34,6 +35,12 @@ unsigned long lastWifiCheckTime = 0;
 unsigned long lastNodeDiscoveryTime = 0;
 unsigned long lastHeartbeatTime = 0;
 unsigned long lastMqttConnectAttempt = 0;
+
+// 动态时间间隔配置
+unsigned long mqttReportInterval = DEFAULT_MQTT_REPORT_INTERVAL;  // MQTT 上报间隔（可动态调整）
+
+// 引用在 wifi_manager.cpp 中定义的 Preferences 对象
+extern Preferences preferences;
 
 // 诊断计数器
 static uint32_t i2cFailureCount = 0;
@@ -97,6 +104,26 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (interval > 0) {
       Serial.printf("⏱️ 采集间隔设置为：%d 秒\n", interval);
       mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"ok\"}");
+    }
+  }
+  
+  // 处理 MQTT 上报间隔调整
+  if (doc.containsKey("mqtt_report_interval")) {
+    int interval = doc["mqtt_report_interval"];
+    if (interval > 0) {
+      mqttReportInterval = interval * 1000;  // 转换为毫秒
+      lastMqttReportTime = millis();  // 重置时间戳，让新间隔立即生效
+      Serial.printf("⏱️ MQTT上报间隔设置为：%d 秒 (%lu ms)\n", interval, mqttReportInterval);
+      
+      // 保存到 Preferences
+      preferences.begin("mqtt_config", false);  // false 表示读写模式
+      preferences.putULong("report_interval", mqttReportInterval);
+      preferences.end();
+      Serial.println("✅ MQTT上报间隔已保存到持久存储");
+      
+      char response[100];
+      snprintf(response, sizeof(response), "{\"status\":\"ok\",\"mqtt_report_interval\":%d}", interval);
+      mqttManager.publish(mqttManager.getRespTopic(), response);
     }
   }
   
@@ -321,6 +348,17 @@ void setup() {
   Serial.println("╚════════════════════════════════════════╝");
   Serial.println("");
   
+  // 加载保存的 MQTT 上报间隔配置
+  preferences.begin("mqtt_config", true);  // true 表示只读模式
+  unsigned long savedInterval = preferences.getULong("report_interval", DEFAULT_MQTT_REPORT_INTERVAL);
+  preferences.end();
+  if (savedInterval > 0 && savedInterval != DEFAULT_MQTT_REPORT_INTERVAL) {
+    mqttReportInterval = savedInterval;
+    Serial.printf("✅ 已加载保存的MQTT上报间隔：%lu ms (%lu 秒)\n", mqttReportInterval, mqttReportInterval / 1000);
+  } else {
+    Serial.printf("✅ 使用默认MQTT上报间隔：%lu ms (1 秒)\n", DEFAULT_MQTT_REPORT_INTERVAL);
+  }
+  
   // 初始化各模块
   Serial.println("🔄 初始化模块...");
   
@@ -413,7 +451,7 @@ void loop() {
   
   // 定期上报数据到 MQTT
   unsigned long step9Start = millis();
-  if (currentTime - lastMqttReportTime >= DEFAULT_MQTT_REPORT_INTERVAL || needReport) {
+  if (currentTime - lastMqttReportTime >= mqttReportInterval || needReport) {
     lastMqttReportTime = currentTime;
     
     if (hasNetworkConnection) {
