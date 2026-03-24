@@ -45,8 +45,14 @@ void WiFiManager::connect() {
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("✅");
         Serial.print("📶 WiFi 已连接，IP 地址：");
-        Serial.println(WiFi.localIP());
+        IPAddress localIP = WiFi.localIP();
+        Serial.println(localIP);
         connecting = false;
+        
+        // 保存本地 IP 到 Preferences，供 Web 服务器显示
+        preferences.begin("device_info", false);
+        preferences.putString("local_ip", localIP.toString());
+        preferences.end();
         
         if (WiFi.getMode() & WIFI_AP) {
           WiFi.mode(WIFI_STA);

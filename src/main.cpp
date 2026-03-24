@@ -11,6 +11,9 @@
 #include "condition_control.h"
 #include "web_server.h"
 #include "system_monitor.h"
+#include "web_ui.h"
+#include "ota_manager.h"
+#include "error_recovery.h"
 
 // ==================== 全局常量定义 ====================
 const char* MQTT_SERVER = "iot.kebaidata.com";
@@ -384,6 +387,27 @@ void setup() {
   // 7. 系统监控
   Serial.println("✅ 所有模块初始化完成！");
   Serial.println("════════════════════════════════════════");
+  
+  // 8. 错误恢复（故障诊断和恢复）
+  errorRecovery.begin();
+  
+  // 9. OTA 固件升级（基于 WiFi）
+  if (WiFi.status() == WL_CONNECTED) {
+    String deviceName = String("esp32-c3-") + String(mqttManager.getDeviceId()).substring(0, 6);
+    otaManager.begin(deviceName.c_str());
+  }
+  
+  // 10. 增强的 Web UI（在 WiFi 连接后才启动，用于内网管理）
+  // 注意：webServerManager 在 WiFi 未配置时由 wifiManager 启动，用于配置 WiFi
+  // 这里的 webUIManager 在 WiFi 连接后启动，提供高级功能
+  if (WiFi.status() == WL_CONNECTED) {
+    webUIManager.begin();
+    Serial.printf("✅ Web UI 已启动 - 访问地址：http://%s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("📌 WiFi 未连接，Web UI 将在连接后启动");
+  }
+  
+  Serial.println("🎉 固件初始化完成！");
 }
 
 // ==================== Loop 函数 ====================
@@ -401,6 +425,23 @@ void loop() {
   if (currentTime - lastWifiCheckTime >= WIFI_CHECK_INTERVAL) {
     lastWifiCheckTime = currentTime;
     wifiManager.connect();
+    
+    // 如果 WiFi 刚连接，启动 Web UI
+    static bool webUIStarted = false;
+    static bool mgmtInfoPublished = false;
+    if (WiFi.status() == WL_CONNECTED && !webUIStarted) {
+      webUIStarted = true;
+      if (!webUIManager.isRunning()) {
+        webUIManager.begin();
+        Serial.printf("✅ Web UI 已启动（WiFi 连接后）- 访问地址：http://%s\n", WiFi.localIP().toString().c_str());
+      }
+    }
+    
+    // 如果 WiFi 已连接且 MQTT 已连接，推送管理信息一次
+    if (WiFi.status() == WL_CONNECTED && mqttManager.isConnected() && !mgmtInfoPublished) {
+      mgmtInfoPublished = true;
+      mqttManager.publishManagementInfo(WiFi.localIP().toString().c_str());
+    }
   }
   unsigned long step2Duration = millis() - step2Start;
   
@@ -426,6 +467,7 @@ void loop() {
   // 处理 HTTP 请求
   unsigned long step5Start = millis();
   webServerManager.handleClient();
+  webUIManager.handleClient();  // 增强的 Web UI
   unsigned long step5Duration = millis() - step5Start;
   
   // 处理 LoRa 消息
@@ -487,6 +529,16 @@ void loop() {
     loraManager.sendDiscovery(String(mqttManager.getDeviceId()), hasNetworkConnection);
   }
   unsigned long step11Duration = millis() - step11Start;
+  
+  // 处理 OTA 固件升级
+  unsigned long step12Start = millis();
+  otaManager.handle();
+  unsigned long step12Duration = millis() - step12Start;
+  
+  // 故障恢复检查和自动恢复
+  unsigned long step13Start = millis();
+  errorRecovery.checkAndRecover();
+  unsigned long step13Duration = millis() - step13Start;
   
   // 小延迟避免看门狗重启，并给系统任务（WiFi、蓝牙等）足够的 CPU 时间
   delay(20);  // 20ms 延迟

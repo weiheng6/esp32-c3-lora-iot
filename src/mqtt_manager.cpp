@@ -1,6 +1,7 @@
 #include "mqtt_manager.h"
 #include "config.h"
 #include <functional>
+#include <ArduinoJson.h>
 
 MQTTManager mqttManager;
 
@@ -14,6 +15,7 @@ MQTTManager::MQTTManager() : mqttClient(wifiClient), firstConnection(true) {
   memset(topicWill, 0, sizeof(topicWill));
   memset(topicMemory, 0, sizeof(topicMemory));
   memset(topicRestart, 0, sizeof(topicRestart));
+  memset(topicMgmtInfo, 0, sizeof(topicMgmtInfo));
 }
 
 void MQTTManager::begin() {
@@ -46,12 +48,14 @@ void MQTTManager::generateTopics() {
   snprintf(topicWill, sizeof(topicWill), "esp32/%s/status", deviceId);
   snprintf(topicMemory, sizeof(topicMemory), "esp32/%s/system/memory", deviceId);
   snprintf(topicRestart, sizeof(topicRestart), "esp32/%s/system/restart", deviceId);
+  snprintf(topicMgmtInfo, sizeof(topicMgmtInfo), "esp32/%s/system/management_info", deviceId);
   
   Serial.println("✅ MQTT 主题已生成：");
   Serial.printf("   温度：%s\n", topicTemp);
   Serial.printf("   湿度：%s\n", topicHum);
   Serial.printf("   命令：%s\n", topicCmd);
   Serial.printf("   响应：%s\n", topicResp);
+  Serial.printf("   管理信息：%s\n", topicMgmtInfo);
 }
 
 void MQTTManager::connect() {
@@ -137,4 +141,36 @@ bool MQTTManager::publish(const char* topic, const char* payload, bool retain) {
 
 void MQTTManager::setCallback(std::function<void(char*, byte*, unsigned int)> callback) {
   mqttClient.setCallback(callback);
+}
+
+void MQTTManager::publishManagementInfo(const char* ipAddress) {
+  if (!mqttClient.connected()) {
+    Serial.printf("⚠️  MQTT 未连接，无法推送管理信息\n");
+    return;
+  }
+
+  // 创建 JSON 文档
+  StaticJsonDocument<200> doc;
+  doc["ip_address"] = ipAddress;
+  doc["management_url"] = String("http://") + String(ipAddress);
+  doc["device_id"] = deviceId;
+  doc["timestamp"] = millis();
+  
+  // 如果能获取到 WiFi 信息，添加到 JSON
+  if (WiFi.isConnected()) {
+    doc["ssid"] = WiFi.SSID();
+    doc["signal_strength"] = WiFi.RSSI();
+  }
+  
+  // 序列化 JSON 并发布
+  String payload;
+  serializeJson(doc, payload);
+  
+  bool result = publish(topicMgmtInfo, payload.c_str(), true);  // 使用 retain 标志
+  if (result) {
+    Serial.printf("✅ 已推送管理信息到 MQTT: %s\n", topicMgmtInfo);
+    Serial.printf("   数据: %s\n", payload.c_str());
+  } else {
+    Serial.printf("❌ 推送管理信息失败\n");
+  }
 }

@@ -12,6 +12,7 @@ void WebServerManager::begin() {
   server.on("/wifi-config", HTTP_GET, [this]() { handleWiFiConfig(); });
   server.on("/save-wifi", HTTP_POST, [this]() { handleSaveWiFi(); });
   server.on("/scan-wifi", HTTP_GET, [this]() { handleScanWiFi(); });
+  server.on("/api/network-info", HTTP_GET, [this]() { handleNetworkInfo(); });
   
   server.begin();
   started = true;
@@ -111,32 +112,250 @@ void WebServerManager::handleSaveWiFi() {
   
   wifiManager.setCredentials(ssid.c_str(), password.c_str());
   
+  // 立即尝试连接 WiFi，获取 IP 地址
+  Serial.println("\n📡 开始连接 WiFi...");
+  WiFi.begin(ssid.c_str(), password.c_str());
+  
+  // 等待 WiFi 连接（最多等待 15 秒）
+  int connectionAttempts = 0;
+  while (WiFi.status() != WL_CONNECTED && connectionAttempts < 30) {
+    delay(500);
+    connectionAttempts++;
+    Serial.print(".");
+  }
+  Serial.println();
+  
+  // 检查连接结果
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("✅ WiFi 连接成功！IP: %s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("⚠️  WiFi 连接超时，但将继续尝试重启");
+  }
+  
   String html = R"=====(<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>配置成功</title>
+    <title>WiFi 配置成功</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
-        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
-        h1 { color: #4CAF50; }
-        p { color: #666; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            min-height: 100vh; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            padding: 20px;
+        }
+        .container { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2); 
+            max-width: 600px; 
+            text-align: center;
+        }
+        h1 { 
+            color: #4CAF50; 
+            font-size: 32px; 
+            margin-bottom: 20px;
+        }
+        .success-icon {
+            font-size: 60px;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: #f0f9f0;
+            border-left: 4px solid #4CAF50;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 6px;
+            text-align: left;
+        }
+        .info-label {
+            color: #666;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+        .info-value {
+            color: #333;
+            font-size: 18px;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+            padding: 10px;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .web-ui-link {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 15px 40px;
+            background: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        .web-ui-link:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4);
+        }
+        .instruction {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 6px;
+            text-align: left;
+        }
+        .instruction-title {
+            color: #1565c0;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .instruction-steps {
+            color: #555;
+            line-height: 1.8;
+        }
+        .step {
+            margin: 8px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        .step:before {
+            content: attr(data-step);
+            position: absolute;
+            left: 0;
+            background: #2196F3;
+            color: white;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .countdown {
+            color: #f44336;
+            font-weight: 700;
+            margin-top: 20px;
+        }
+        .status-connected {
+            color: #4CAF50;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .status-not-connected {
+            color: #f44336;
+            font-size: 16px;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>✅ WiFi 配置成功！</h1>
-        <p>设备正在连接到：<strong>)=====";
+        <div class="success-icon">✅</div>
+        <h1>WiFi 配置成功！</h1>
+        
+        <div class="info-box">
+            <div class="info-label">已连接的 WiFi 网络</div>
+            <div class="info-value">)=====";
+  
   html += ssid;
-  html += R"=====(</strong></p>
-        <p>请关闭此页面，设备将自动重启并连接。</p>
+  
+  html += R"=====(</div>
+        </div>
+        
+        <div id="networkInfo"></div>
+        
+        <div class="instruction">
+            <div class="instruction-title">📖 后续步骤</div>
+            <div class="instruction-steps">
+                <div class="step" data-step="1">关闭本页面</div>
+                <div class="step" data-step="2">断开热点，连接到上面显示的 WiFi 网络</div>
+                <div class="step" data-step="3">在浏览器中访问显示的地址进行高级配置</div>
+                <div class="step" data-step="4">配置 MQTT、采集间隔等参数</div>
+            </div>
+        </div>
+        
+        <p class="countdown">⏱️ 设备将在 <span id="countdown">30</span> 秒后重启</p>
     </div>
+
+    <script>
+        function updateNetworkInfo() {
+            fetch('/api/network-info')
+                .then(response => response.json())
+                .then(data => {
+                    let html = '';
+                    
+                    if (data.connected) {
+                        html += '<div class="info-box">';
+                        html += '<div class="info-label">设备内网 IP 地址</div>';
+                        html += '<div class="info-value">' + data.local_ip + '</div>';
+                        html += '</div>';
+                        
+                        html += '<div class="info-box">';
+                        html += '<div class="info-label">Web 管理界面</div>';
+                        html += '<a href="http://' + data.local_ip + '" class="web-ui-link" target="_blank">🌐 访问管理界面</a>';
+                        html += '</div>';
+                        
+                        html += '<p class="status-connected">✅ 设备已成功连接到 WiFi 网络</p>';
+                    } else {
+                        html += '<p class="status-not-connected">⏳ 设备正在连接 WiFi，请稍候...</p>';
+                    }
+                    
+                    document.getElementById('networkInfo').innerHTML = html;
+                })
+                .catch(error => {
+                    console.error('获取网络信息失败:', error);
+                    document.getElementById('networkInfo').innerHTML = '<p class="status-not-connected">⏳ 正在获取网络信息...</p>';
+                });
+        }
+        
+        // 初始化和定时更新
+        updateNetworkInfo();
+        setInterval(updateNetworkInfo, 1000);
+        
+        // 倒计时
+        let countdown = 30;
+        setInterval(() => {
+            countdown--;
+            document.getElementById('countdown').textContent = countdown;
+            if (countdown <= 0) {
+                document.body.innerHTML = '<div style="text-align:center;padding:50px;"><h1>设备重启中...</h1><p>请重新连接到您的 WiFi 网络，然后访问设备的 IP 地址进行管理</p></div>';
+            }
+        }, 1000);
+    </script>
 </body>
 </html>)=====";
   
+  // 发送响应给客户端
   sendResponse(200, "text/html", html);
-  delay(2000);
+  
+  // 关闭 AP 热点（因为配置已完成）
+  if (WiFi.getMode() & WIFI_AP) {
+    Serial.println("🔌 配置完成，正在关闭 AP 热点...");
+    delay(500);  // 等待客户端接收响应
+    WiFi.mode(WIFI_STA);
+    Serial.println("✅ AP 热点已关闭，设备将在 3 秒后重启");
+    delay(3000);
+  } else {
+    Serial.println("✅ WiFi 配置已保存，设备将在 3 秒后重启");
+    delay(3000);
+  }
+  
+  // 重启设备
+  Serial.println("🔄 设备正在重启...");
   ESP.restart();
 }
 
@@ -182,4 +401,28 @@ void WebServerManager::handleScanWiFi() {
 
 void WebServerManager::sendResponse(int code, const char* contentType, const String& content) {
   server.send(code, contentType, content);
+}
+
+void WebServerManager::handleNetworkInfo() {
+  // 构建网络信息 JSON 响应
+  String json = "{";
+  
+  // 检查 WiFi 连接状态
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  json += "\"connected\":" + String(connected ? "true" : "false") + ",";
+  
+  if (connected) {
+    IPAddress localIP = WiFi.localIP();
+    json += "\"local_ip\":\"" + localIP.toString() + "\",";
+    json += "\"ssid\":\"" + WiFi.SSID() + "\",";
+    json += "\"signal_strength\":" + String(WiFi.RSSI());
+  } else {
+    json += "\"local_ip\":\"未连接\",";
+    json += "\"ssid\":\"未连接\",";
+    json += "\"signal_strength\":0";
+  }
+  
+  json += "}";
+  
+  sendResponse(200, "application/json", json);
 }

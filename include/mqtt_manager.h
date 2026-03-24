@@ -19,6 +19,7 @@ private:
   char topicWill[50];
   char topicMemory[50];
   char topicRestart[50];
+  char topicMgmtInfo[50];  // 新增：管理界面信息主题
   bool firstConnection;
 
   void generateTopics();
@@ -32,6 +33,9 @@ public:
   bool publish(const char* topic, const char* payload, bool retain = false);
   void setCallback(std::function<void(char*, byte*, unsigned int)> callback);
   
+  // 发送管理界面地址到 MQTT
+  void publishManagementInfo(const char* ipAddress);
+  
   // 获取主题
   const char* getTempTopic() const { return topicTemp; }
   const char* getHumTopic() const { return topicHum; }
@@ -40,6 +44,7 @@ public:
   const char* getWillTopic() const { return topicWill; }
   const char* getMemoryTopic() const { return topicMemory; }
   const char* getRestartTopic() const { return topicRestart; }
+  const char* getMgmtInfoTopic() const { return topicMgmtInfo; }
   const char* getDeviceId() const { return deviceId; }
 };
 

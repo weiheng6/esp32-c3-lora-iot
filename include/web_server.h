@@ -13,6 +13,7 @@ private:
   void handleWiFiConfig();
   void handleSaveWiFi();
   void handleScanWiFi();
+  void handleNetworkInfo();
   void sendResponse(int code, const char* contentType, const String& content);
 
 public:
