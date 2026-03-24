@@ -42,6 +42,10 @@ unsigned long lastMqttConnectAttempt = 0;
 // 动态时间间隔配置
 unsigned long mqttReportInterval = DEFAULT_MQTT_REPORT_INTERVAL;  // MQTT 上报间隔（可动态调整）
 
+// 【关键】手动控制模式标志（全局变量，非 static）
+bool manualRelayMode = false;  // true = 用户手动控制，false = 自动控制
+unsigned long manualModeEndTime = 0;  // 手动模式什么时候结束（如果为0则一直手动）
+
 // 引用在 wifi_manager.cpp 中定义的 Preferences 对象
 extern Preferences preferences;
 
@@ -156,11 +160,126 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     JsonObject conditionObj = doc["condition"].as<JsonObject>();
     
     if (conditionObj.containsKey("enabled")) {
-      conditionControl.setEnabled(conditionObj["enabled"]);
+      bool conditionEnabled = conditionObj["enabled"].as<bool>();
+      conditionControl.setEnabled(conditionEnabled);
       Serial.printf("🔄 条件控制%s\n", conditionControl.isEnabled() ? "已启用" : "已禁用");
+      
+      // 【关键修复】如果启用条件控制，必须禁用定时控制（互斥）
+      if (conditionEnabled && conditionControl.isTimerEnabled()) {
+        conditionControl.setTimerEnabled(false);
+        Serial.println("⏰ 定时控制已自动禁用（条件控制优先级较低）");
+      }
+    }
+    
+    // 处理普通条件控制配置
+    if (!conditionObj.containsKey("use_hysteresis") || !conditionObj["use_hysteresis"].as<bool>()) {
+      // 单阈值模式
+      if (conditionObj.containsKey("temp") && conditionObj["temp"].is<JsonObject>()) {
+        JsonObject tempObj = conditionObj["temp"].as<JsonObject>();
+        if (tempObj.containsKey("enabled")) {
+          bool enabled = tempObj["enabled"];
+          float threshold = tempObj.containsKey("threshold") ? tempObj["threshold"].as<float>() : 25.0;
+          int compareOp = tempObj.containsKey("compare") ? tempObj["compare"].as<int>() : COMPARE_GREATER_THAN;
+          conditionControl.setTempCondition(enabled, threshold, compareOp);
+          Serial.printf("🌡️ 温度条件：%s (阈值:%.1f°C, 操作符:%d)\n", enabled ? "启用" : "禁用", threshold, compareOp);
+        }
+      }
+      
+      if (conditionObj.containsKey("humi") && conditionObj["humi"].is<JsonObject>()) {
+        JsonObject humiObj = conditionObj["humi"].as<JsonObject>();
+        if (humiObj.containsKey("enabled")) {
+          bool enabled = humiObj["enabled"];
+          float threshold = humiObj.containsKey("threshold") ? humiObj["threshold"].as<float>() : 60.0;
+          int compareOp = humiObj.containsKey("compare") ? humiObj["compare"].as<int>() : COMPARE_GREATER_THAN;
+          conditionControl.setHumiCondition(enabled, threshold, compareOp);
+          Serial.printf("💧 湿度条件：%s (阈值:%.1f%%, 操作符:%d)\n", enabled ? "启用" : "禁用", threshold, compareOp);
+        }
+      }
+      
+      if (conditionObj.containsKey("logic")) {
+        bool andMode = (conditionObj["logic"].as<String>() == "and");
+        conditionControl.setLogicMode(andMode);
+        Serial.printf("🔗 逻辑模式：%s\n", andMode ? "AND" : "OR");
+      }
+    }
+    
+    // 处理滞回控制配置
+    if (conditionObj.containsKey("use_hysteresis") && conditionObj["use_hysteresis"].as<bool>()) {
+      float tempHigh = 28.0, tempLow = 26.0, humiHigh = 70.0, humiLow = 60.0;
+      bool tempEnabled = false, humiEnabled = false;
+      
+      if (conditionObj.containsKey("temp") && conditionObj["temp"].is<JsonObject>()) {
+        JsonObject tempObj = conditionObj["temp"].as<JsonObject>();
+        tempEnabled = tempObj.containsKey("enabled") ? tempObj["enabled"].as<bool>() : false;
+        tempHigh = tempObj.containsKey("high_threshold") ? tempObj["high_threshold"].as<float>() : 28.0;
+        tempLow = tempObj.containsKey("low_threshold") ? tempObj["low_threshold"].as<float>() : 26.0;
+      }
+      
+      if (conditionObj.containsKey("humi") && conditionObj["humi"].is<JsonObject>()) {
+        JsonObject humiObj = conditionObj["humi"].as<JsonObject>();
+        humiEnabled = humiObj.containsKey("enabled") ? humiObj["enabled"].as<bool>() : false;
+        humiHigh = humiObj.containsKey("high_threshold") ? humiObj["high_threshold"].as<float>() : 70.0;
+        humiLow = humiObj.containsKey("low_threshold") ? humiObj["low_threshold"].as<float>() : 60.0;
+      }
+      
+      conditionControl.setHysteresis(true, tempHigh, tempLow, humiHigh, humiLow);
+      if (tempEnabled) Serial.printf("🌡️ 温度滞回：%.1f°C(高) - %.1f°C(低)\n", tempHigh, tempLow);
+      if (humiEnabled) Serial.printf("💧 湿度滞回：%.1f%%(高) - %.1f%%(低)\n", humiHigh, humiLow);
     }
     
     mqttManager.publish(mqttManager.getRespTopic(), conditionControl.toJSON().c_str());
+  }
+  
+  // 处理定时控制配置
+  if (doc.containsKey("timer")) {
+    JsonObject timerObj = doc["timer"].as<JsonObject>();
+    
+    if (timerObj.containsKey("enabled")) {
+      bool timerEnabled = timerObj["enabled"].as<bool>();
+      conditionControl.setTimerEnabled(timerEnabled);
+      Serial.printf("⏰ 定时控制%s\n", timerEnabled ? "已启用" : "已禁用");
+      
+      // 【关键修复】如果启用定时控制，必须禁用条件控制（定时优先级更高）
+      if (timerEnabled && conditionControl.isEnabled()) {
+        conditionControl.setEnabled(false);
+        Serial.println("🔄 条件控制已自动禁用（定时控制优先级更高）");
+      }
+    }
+    
+    // 处理时间段配置
+    if (timerObj.containsKey("clear") && timerObj["clear"].as<bool>()) {
+      conditionControl.clearTimeSlots();
+      Serial.println("⏰ 已清除所有时间段");
+    }
+    
+    if (timerObj.containsKey("slots") && timerObj["slots"].is<JsonArray>()) {
+      JsonArray slotsArray = timerObj["slots"].as<JsonArray>();
+      for (JsonObject slot : slotsArray) {
+        uint8_t index = slot.containsKey("index") ? slot["index"].as<uint8_t>() : 0;
+        bool enabled = slot.containsKey("enabled") ? slot["enabled"].as<bool>() : false;
+        
+        uint8_t startH = 0, startM = 0, endH = 0, endM = 0;
+        bool state = false;
+        
+        if (slot.containsKey("start_time")) {
+          String startTime = slot["start_time"].as<String>();
+          sscanf(startTime.c_str(), "%hhu:%hhu", &startH, &startM);
+        }
+        if (slot.containsKey("end_time")) {
+          String endTime = slot["end_time"].as<String>();
+          sscanf(endTime.c_str(), "%hhu:%hhu", &endH, &endM);
+        }
+        state = slot.containsKey("state") ? slot["state"].as<bool>() : false;
+        
+        if (index < 8) {
+          conditionControl.setTimeSlot(index, enabled, startH, startM, endH, endM, state);
+          Serial.printf("⏰ 时间段 %d：%02d:%02d-%02d:%02d (状态:%s)\n", 
+                       index, startH, startM, endH, endM, state ? "开启" : "关闭");
+        }
+      }
+    }
+    
+    mqttManager.publish(mqttManager.getRespTopic(), conditionControl.getTimerJSON().c_str());
   }
   
   // 处理 WiFi 重置
@@ -259,11 +378,14 @@ void acquireSensorData() {
     Serial.print(humidity);
     Serial.println(" %RH");
     
-    // 执行条件控制
-    if (conditionControl.checkConditions(temperature, humidity)) {
-      relayControl.turnOn();
-    } else {
-      relayControl.turnOff();
+    // 【关键修复】只在非手动模式下才执行自动控制
+    if (!manualRelayMode) {
+      // 执行条件控制或定时控制
+      if (conditionControl.checkAllConditions(temperature, humidity)) {
+        relayControl.turnOn();
+      } else {
+        relayControl.turnOff();
+      }
     }
   } else {
     i2cFailureCount++;
