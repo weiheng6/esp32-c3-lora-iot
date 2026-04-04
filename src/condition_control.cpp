@@ -31,30 +31,30 @@ void ConditionControl::loadConfig() {
   // 【新增】加载灵活条件控制配置
   enabled = preferences.getInt("enabled", 0) == 1;
   
-  // 【新增】加载 ON 条件组
-  onConditionGroup.enabled = preferences.getInt("on_group_enabled", 0) == 1;
-  onConditionGroup.logicMode = preferences.getInt("on_group_logic", LOGIC_AND);
-  onConditionGroup.conditionCount = preferences.getInt("on_cond_count", 0);
+  // 【新增】加载 ON 条件组（使用短密钥以符合 NVS 15 字节限制）
+  onConditionGroup.enabled = preferences.getInt("og_en", 0) == 1;
+  onConditionGroup.logicMode = preferences.getInt("og_logic", LOGIC_AND);
+  onConditionGroup.conditionCount = preferences.getInt("og_cnt", 0);
   
   for (int i = 0; i < 4 && i < onConditionGroup.conditionCount; i++) {
-    String prefix = "on_cond_" + String(i) + "_";
-    onConditionGroup.conditions[i].enabled = preferences.getInt((prefix + "enabled").c_str(), 0) == 1;
-    onConditionGroup.conditions[i].sensorType = preferences.getInt((prefix + "sensor").c_str(), SENSOR_TEMP);
-    onConditionGroup.conditions[i].compareOp = preferences.getInt((prefix + "compare").c_str(), COMPARE_GREATER_THAN);
-    onConditionGroup.conditions[i].threshold = preferences.getFloat((prefix + "threshold").c_str(), 25.0);
+    String prefix = "oc" + String(i) + "_";
+    onConditionGroup.conditions[i].enabled = preferences.getInt((prefix + "en").c_str(), 0) == 1;
+    onConditionGroup.conditions[i].sensorType = preferences.getInt((prefix + "st").c_str(), SENSOR_TEMP);
+    onConditionGroup.conditions[i].compareOp = preferences.getInt((prefix + "cmp").c_str(), COMPARE_GREATER_THAN);
+    onConditionGroup.conditions[i].threshold = preferences.getFloat((prefix + "th").c_str(), 25.0);
   }
   
-  // 【新增】加载 OFF 条件组
-  offConditionGroup.enabled = preferences.getInt("off_group_enabled", 0) == 1;
-  offConditionGroup.logicMode = preferences.getInt("off_group_logic", LOGIC_AND);
-  offConditionGroup.conditionCount = preferences.getInt("off_cond_count", 0);
+  // 【新增】加载 OFF 条件组（使用短密钥以符合 NVS 15 字节限制）
+  offConditionGroup.enabled = preferences.getInt("ofg_en", 0) == 1;
+  offConditionGroup.logicMode = preferences.getInt("ofg_logic", LOGIC_AND);
+  offConditionGroup.conditionCount = preferences.getInt("ofg_cnt", 0);
   
   for (int i = 0; i < 4 && i < offConditionGroup.conditionCount; i++) {
-    String prefix = "off_cond_" + String(i) + "_";
-    offConditionGroup.conditions[i].enabled = preferences.getInt((prefix + "enabled").c_str(), 0) == 1;
-    offConditionGroup.conditions[i].sensorType = preferences.getInt((prefix + "sensor").c_str(), SENSOR_TEMP);
-    offConditionGroup.conditions[i].compareOp = preferences.getInt((prefix + "compare").c_str(), COMPARE_GREATER_THAN);
-    offConditionGroup.conditions[i].threshold = preferences.getFloat((prefix + "threshold").c_str(), 25.0);
+    String prefix = "ofc" + String(i) + "_";
+    offConditionGroup.conditions[i].enabled = preferences.getInt((prefix + "en").c_str(), 0) == 1;
+    offConditionGroup.conditions[i].sensorType = preferences.getInt((prefix + "st").c_str(), SENSOR_TEMP);
+    offConditionGroup.conditions[i].compareOp = preferences.getInt((prefix + "cmp").c_str(), COMPARE_GREATER_THAN);
+    offConditionGroup.conditions[i].threshold = preferences.getFloat((prefix + "th").c_str(), 25.0);
   }
   
   // 【保留】加载旧的条件配置（兼容性）
@@ -95,30 +95,30 @@ void ConditionControl::saveConfig() {
   // 【新增】保存灵活条件控制配置
   preferences.putInt("enabled", enabled ? 1 : 0);
   
-  // 【新增】保存 ON 条件组
-  preferences.putInt("on_group_enabled", onConditionGroup.enabled ? 1 : 0);
-  preferences.putInt("on_group_logic", onConditionGroup.logicMode);
-  preferences.putInt("on_cond_count", onConditionGroup.conditionCount);
+  // 【新增】保存 ON 条件组（使用短密钥以符合 NVS 15 字节限制）
+  preferences.putInt("og_en", onConditionGroup.enabled ? 1 : 0);
+  preferences.putInt("og_logic", onConditionGroup.logicMode);
+  preferences.putInt("og_cnt", onConditionGroup.conditionCount);
   
   for (int i = 0; i < 4; i++) {
-    String prefix = "on_cond_" + String(i) + "_";
-    preferences.putInt((prefix + "enabled").c_str(), onConditionGroup.conditions[i].enabled ? 1 : 0);
-    preferences.putInt((prefix + "sensor").c_str(), onConditionGroup.conditions[i].sensorType);
-    preferences.putInt((prefix + "compare").c_str(), onConditionGroup.conditions[i].compareOp);
-    preferences.putFloat((prefix + "threshold").c_str(), onConditionGroup.conditions[i].threshold);
+    String prefix = "oc" + String(i) + "_";
+    preferences.putInt((prefix + "en").c_str(), onConditionGroup.conditions[i].enabled ? 1 : 0);
+    preferences.putInt((prefix + "st").c_str(), onConditionGroup.conditions[i].sensorType);
+    preferences.putInt((prefix + "cmp").c_str(), onConditionGroup.conditions[i].compareOp);
+    preferences.putFloat((prefix + "th").c_str(), onConditionGroup.conditions[i].threshold);
   }
   
-  // 【新增】保存 OFF 条件组
-  preferences.putInt("off_group_enabled", offConditionGroup.enabled ? 1 : 0);
-  preferences.putInt("off_group_logic", offConditionGroup.logicMode);
-  preferences.putInt("off_cond_count", offConditionGroup.conditionCount);
+  // 【新增】保存 OFF 条件组（使用短密钥以符合 NVS 15 字节限制）
+  preferences.putInt("ofg_en", offConditionGroup.enabled ? 1 : 0);
+  preferences.putInt("ofg_logic", offConditionGroup.logicMode);
+  preferences.putInt("ofg_cnt", offConditionGroup.conditionCount);
   
   for (int i = 0; i < 4; i++) {
-    String prefix = "off_cond_" + String(i) + "_";
-    preferences.putInt((prefix + "enabled").c_str(), offConditionGroup.conditions[i].enabled ? 1 : 0);
-    preferences.putInt((prefix + "sensor").c_str(), offConditionGroup.conditions[i].sensorType);
-    preferences.putInt((prefix + "compare").c_str(), offConditionGroup.conditions[i].compareOp);
-    preferences.putFloat((prefix + "threshold").c_str(), offConditionGroup.conditions[i].threshold);
+    String prefix = "ofc" + String(i) + "_";
+    preferences.putInt((prefix + "en").c_str(), offConditionGroup.conditions[i].enabled ? 1 : 0);
+    preferences.putInt((prefix + "st").c_str(), offConditionGroup.conditions[i].sensorType);
+    preferences.putInt((prefix + "cmp").c_str(), offConditionGroup.conditions[i].compareOp);
+    preferences.putFloat((prefix + "th").c_str(), offConditionGroup.conditions[i].threshold);
   }
   
   // 【保留】保存旧的条件配置（兼容性）
