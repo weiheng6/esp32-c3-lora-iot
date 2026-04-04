@@ -227,7 +227,9 @@ void ConditionControl::setLogicMode(bool andMode) {
 
 bool ConditionControl::checkConditions(float temperature, float humidity) {
   if (!enabled) {
-    return false;
+    // 【关键修复】当条件控制被禁用时，返回当前继电器状态，不进行任何判断
+    Serial.println("⚠️  条件控制已禁用，保持当前继电器状态");
+    return relayControl.getState();
   }
   
   bool currentRelayState = relayControl.getState();
@@ -449,6 +451,12 @@ bool ConditionControl::checkTimer() {
 }
 
 bool ConditionControl::checkAllConditions(float temperature, float humidity) {
+  // 【关键修复】如果条件控制和定时控制都禁用，则不进行任何自动控制
+  if (!enabled && !timerEnabled) {
+    Serial.println("ℹ️  条件控制和定时控制都已禁用，保持当前继电器状态");
+    return relayControl.getState();
+  }
+  
   // 如果定时控制启用，直接返回定时结果
   if (timerEnabled) {
     return checkTimer();

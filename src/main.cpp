@@ -169,6 +169,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         conditionControl.setTimerEnabled(false);
         Serial.println("⏰ 定时控制已自动禁用（条件控制优先级较低）");
       }
+      
+      // 【关键修复】如果禁用条件控制，则不处理其他条件参数，直接返回
+      if (!conditionEnabled) {
+        Serial.println("❌ 条件控制已关闭，跳过其他条件参数的处理");
+        mqttManager.publish(mqttManager.getRespTopic(), conditionControl.toJSON().c_str());
+        return;
+      }
     }
     
     // 处理普通条件控制配置
