@@ -424,9 +424,14 @@ bool ConditionControl::checkTimer() {
   struct tm* timeinfo = localtime(&now);
   uint8_t currentHour = timeinfo->tm_hour;
   uint8_t currentMinute = timeinfo->tm_min;
+  uint8_t currentSecond = timeinfo->tm_sec;
   
   // 转换为分钟便于比较
   uint16_t currentTime = currentHour * 60 + currentMinute;
+  
+  // 【新增】打印当前时间以便调试
+  LOG_DEBUGF("⏰ [当前时间: %02d:%02d:%02d] 开始检查定时器时间段", 
+             currentHour, currentMinute, currentSecond);
   
   // 检查所有启用的时间段
   for (int i = 0; i < 8; i++) {
@@ -434,27 +439,42 @@ bool ConditionControl::checkTimer() {
       uint16_t startTime = timeSlots[i].startHour * 60 + timeSlots[i].startMinute;
       uint16_t endTime = timeSlots[i].endHour * 60 + timeSlots[i].endMinute;
       
+      // 【新增】打印时间段信息用于调试
+      LOG_DEBUGF("  🕐 检查时间段[%d]: %02d:%02d ~ %02d:%02d (目标状态:%s)", 
+                 i, timeSlots[i].startHour, timeSlots[i].startMinute, 
+                 timeSlots[i].endHour, timeSlots[i].endMinute,
+                 timeSlots[i].state ? "开启" : "关闭");
+      
       // 处理跨越午夜的情况
       if (startTime <= endTime) {
         if (currentTime >= startTime && currentTime < endTime) {
+          LOG_TRIGGERF("✅ 当前时间在时间段[%d]内 - 继电器将%s", 
+                     i, timeSlots[i].state ? "开启" : "关闭");
           return timeSlots[i].state;
         }
       } else {
         // 跨越午夜
         if (currentTime >= startTime || currentTime < endTime) {
+          LOG_TRIGGERF("✅ 当前时间在跨越午夜的时间段[%d]内 - 继电器将%s", 
+                     i, timeSlots[i].state ? "开启" : "关闭");
           return timeSlots[i].state;
         }
       }
     }
   }
   
+  LOG_DEBUG("⏰ 当前时间不在任何启用的时间段内 - 继电器将关闭");
   return false;
 }
 
 bool ConditionControl::checkAllConditions(float temperature, float humidity) {
   // 【关键修复】如果条件控制和定时控制都禁用，则不进行任何自动控制
   if (!enabled && !timerEnabled) {
-    LOG_DEBUG("条件控制和定时控制都已禁用，保持当前继电器状态");
+    // 【新增】打印当前时间以便调试
+    time_t now = time(nullptr);
+    struct tm* timeinfo = localtime(&now);
+    LOG_DEBUGF("⏰ [%02d:%02d:%02d] 条件控制和定时控制都已禁用，保持当前继电器状态", 
+               timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
     return relayControl.getState();
   }
   
