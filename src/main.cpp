@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include "config.h"
+#include "log_manager.h"
 #include "sensor.h"
 #include "wifi_manager.h"
 #include "mqtt_manager.h"
@@ -162,17 +163,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (conditionObj.containsKey("enabled")) {
       bool conditionEnabled = conditionObj["enabled"].as<bool>();
       conditionControl.setEnabled(conditionEnabled);
-      Serial.printf("🔄 条件控制%s\n", conditionControl.isEnabled() ? "已启用" : "已禁用");
+      LOG_CMDF("� 条件控制%s", conditionControl.isEnabled() ? "已启用" : "已禁用");
       
       // 【关键修复】如果启用条件控制，必须禁用定时控制（互斥）
       if (conditionEnabled && conditionControl.isTimerEnabled()) {
         conditionControl.setTimerEnabled(false);
-        Serial.println("⏰ 定时控制已自动禁用（条件控制优先级较低）");
+        LOG_CMD("⏰ 定时控制已自动禁用");
       }
       
       // 【关键修复】如果禁用条件控制，则不处理其他条件参数，直接返回
       if (!conditionEnabled) {
-        Serial.println("❌ 条件控制已关闭，跳过其他条件参数的处理");
         mqttManager.publish(mqttManager.getRespTopic(), conditionControl.toJSON().c_str());
         return;
       }
@@ -188,7 +188,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           float threshold = tempObj.containsKey("threshold") ? tempObj["threshold"].as<float>() : 25.0;
           int compareOp = tempObj.containsKey("compare") ? tempObj["compare"].as<int>() : COMPARE_GREATER_THAN;
           conditionControl.setTempCondition(enabled, threshold, compareOp);
-          Serial.printf("🌡️ 温度条件：%s (阈值:%.1f°C, 操作符:%d)\n", enabled ? "启用" : "禁用", threshold, compareOp);
+          LOG_CMDF("🌡️  温度条件：%s (阈值:%.1f°C)", enabled ? "启用" : "禁用", threshold);
         }
       }
       
@@ -199,14 +199,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           float threshold = humiObj.containsKey("threshold") ? humiObj["threshold"].as<float>() : 60.0;
           int compareOp = humiObj.containsKey("compare") ? humiObj["compare"].as<int>() : COMPARE_GREATER_THAN;
           conditionControl.setHumiCondition(enabled, threshold, compareOp);
-          Serial.printf("💧 湿度条件：%s (阈值:%.1f%%, 操作符:%d)\n", enabled ? "启用" : "禁用", threshold, compareOp);
+          LOG_CMDF("💧 湿度条件：%s (阈值:%.1f%%)", enabled ? "启用" : "禁用", threshold);
         }
       }
       
       if (conditionObj.containsKey("logic")) {
         bool andMode = (conditionObj["logic"].as<String>() == "and");
         conditionControl.setLogicMode(andMode);
-        Serial.printf("🔗 逻辑模式：%s\n", andMode ? "AND" : "OR");
+        LOG_CMDF("🔗 逻辑模式：%s", andMode ? "AND" : "OR");
       }
     }
     
@@ -230,8 +230,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
       
       conditionControl.setHysteresis(true, tempHigh, tempLow, humiHigh, humiLow);
-      if (tempEnabled) Serial.printf("🌡️ 温度滞回：%.1f°C(高) - %.1f°C(低)\n", tempHigh, tempLow);
-      if (humiEnabled) Serial.printf("💧 湿度滞回：%.1f%%(高) - %.1f%%(低)\n", humiHigh, humiLow);
+      if (tempEnabled) LOG_CMDF("🌡️  温度滞回：%.1f°C(高) - %.1f°C(低)", tempHigh, tempLow);
+      if (humiEnabled) LOG_CMDF("💧 湿度滞回：%.1f%%(高) - %.1f%%(低)", humiHigh, humiLow);
     }
     
     mqttManager.publish(mqttManager.getRespTopic(), conditionControl.toJSON().c_str());
@@ -244,19 +244,19 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (timerObj.containsKey("enabled")) {
       bool timerEnabled = timerObj["enabled"].as<bool>();
       conditionControl.setTimerEnabled(timerEnabled);
-      Serial.printf("⏰ 定时控制%s\n", timerEnabled ? "已启用" : "已禁用");
+      LOG_CMDF("⏰ 定时控制%s", timerEnabled ? "已启用" : "已禁用");
       
       // 【关键修复】如果启用定时控制，必须禁用条件控制（定时优先级更高）
       if (timerEnabled && conditionControl.isEnabled()) {
         conditionControl.setEnabled(false);
-        Serial.println("🔄 条件控制已自动禁用（定时控制优先级更高）");
+        LOG_CMD("🔄 条件控制已自动禁用");
       }
     }
     
     // 处理时间段配置
     if (timerObj.containsKey("clear") && timerObj["clear"].as<bool>()) {
       conditionControl.clearTimeSlots();
-      Serial.println("⏰ 已清除所有时间段");
+      LOG_CMD("⏰ 已清除所有时间段");
     }
     
     if (timerObj.containsKey("slots") && timerObj["slots"].is<JsonArray>()) {
@@ -280,8 +280,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         
         if (index < 8) {
           conditionControl.setTimeSlot(index, enabled, startH, startM, endH, endM, state);
-          Serial.printf("⏰ 时间段 %d：%02d:%02d-%02d:%02d (状态:%s)\n", 
-                       index, startH, startM, endH, endM, state ? "开启" : "关闭");
+          LOG_CMDF("⏰ 时间段 %d：%02d:%02d-%02d:%02d (状态:%s)", 
+                  index, startH, startM, endH, endM, state ? "开启" : "关闭");
         }
       }
     }
@@ -473,6 +473,12 @@ void reportSensorDataToMqtt() {
 void setup() {
   Serial.begin(115200);
   delay(500);
+  
+  // 初始化日志管理器
+  // 调整日志级别：LOG_DEBUG - 打印所有日志
+  //              LOG_INFO  - 仅打印信息和错误
+  //              LOG_ERROR - 仅打印错误
+  LogManager::init(LOG_DEBUG);  // 设置为调试模式，打印所有日志
   
   Serial.println("\n\n");
   Serial.println("╔════════════════════════════════════════╗");

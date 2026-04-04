@@ -1,5 +1,6 @@
 #include "condition_control.h"
 #include "relay_control.h"
+#include "log_manager.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 
@@ -22,7 +23,7 @@ ConditionControl::ConditionControl()
 
 void ConditionControl::begin() {
   loadConfig();
-  Serial.println("✅ 条件控制管理器初始化成功");
+  LOG_DEBUG("条件控制管理器初始化成功");
 }
 
 void ConditionControl::loadConfig() {
@@ -85,8 +86,8 @@ void ConditionControl::loadConfig() {
   
   preferences.end();
   
-  Serial.printf("✅ 已加载条件控制配置：%s\n", enabled ? "已启用" : "已禁用");
-  Serial.printf("✅ 定时控制：%s\n", timerEnabled ? "已启用" : "已禁用");
+  LOG_DEBUG("已加载条件控制配置");
+  LOG_DEBUG("已加载定时控制配置");
 }
 
 void ConditionControl::saveConfig() {
@@ -149,7 +150,7 @@ void ConditionControl::saveConfig() {
   
   preferences.end();
   
-  Serial.println("✅ 条件配置已保存");
+  LOG_CMD("条件配置已保存");
 }
 
 void ConditionControl::setEnabled(bool value) {
@@ -228,7 +229,6 @@ void ConditionControl::setLogicMode(bool andMode) {
 bool ConditionControl::checkConditions(float temperature, float humidity) {
   if (!enabled) {
     // 【关键修复】当条件控制被禁用时，返回当前继电器状态，不进行任何判断
-    Serial.println("⚠️  条件控制已禁用，保持当前继电器状态");
     return relayControl.getState();
   }
   
@@ -236,13 +236,13 @@ bool ConditionControl::checkConditions(float temperature, float humidity) {
   
   // 【新增】首先检查 OFF 条件组 - 如果满足则关闭
   if (offConditionGroup.enabled && offConditionGroup.evaluate(temperature, humidity)) {
-    Serial.println("📵 OFF条件满足 - 继电器将关闭");
+    LOG_TRIGGER("📵 OFF条件满足 - 继电器将关闭");
     return false;
   }
   
   // 【新增】检查 ON 条件组 - 如果满足则打开
   if (onConditionGroup.enabled && onConditionGroup.evaluate(temperature, humidity)) {
-    Serial.println("✅ ON条件满足 - 继电器将开启");
+    LOG_TRIGGER("✅ ON条件满足 - 继电器将开启");
     return true;
   }
   
@@ -336,8 +336,9 @@ bool ConditionControl::checkConditions(float temperature, float humidity) {
       if (humiConditionEnabled) finalCondition = finalCondition || humiConditionMet;
     }
     
-    Serial.printf("📋 条件判断结果：%s（%s逻辑）\n", finalCondition ? "满足" : "不满足",
-                  conditionLogicAnd ? "AND" : "OR");
+    if (finalCondition) {
+      LOG_TRIGGER("⚡ 旧条件逻辑满足 - 继电器将开启");
+    }
     
     return finalCondition;
   }
@@ -453,7 +454,7 @@ bool ConditionControl::checkTimer() {
 bool ConditionControl::checkAllConditions(float temperature, float humidity) {
   // 【关键修复】如果条件控制和定时控制都禁用，则不进行任何自动控制
   if (!enabled && !timerEnabled) {
-    Serial.println("ℹ️  条件控制和定时控制都已禁用，保持当前继电器状态");
+    LOG_DEBUG("条件控制和定时控制都已禁用，保持当前继电器状态");
     return relayControl.getState();
   }
   
