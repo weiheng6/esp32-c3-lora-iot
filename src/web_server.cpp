@@ -58,7 +58,7 @@ void WebServerManager::handleRoot() {
 </head>
 <body>
     <div class="container">
-        <h1>ESP32 条件控制器</h1>
+        <h1>智能终端AP配网</h1>
         <h2>WiFi配置</h2>
         <form action="/save-wifi" method="post">
             <label for="ssid">WiFi名称:</label>
@@ -362,39 +362,35 @@ void WebServerManager::handleSaveWiFi() {
 void WebServerManager::handleScanWiFi() {
   wifi_mode_t currentMode = WiFi.getMode();
   
-  if (currentMode == WIFI_AP) {
-    WiFi.mode(WIFI_AP_STA);
-  }
+  Serial.printf("🔍 开始 WiFi 扫描 (当前模式: %d)...\n", currentMode);
   
-  // 使用异步扫描模式，不会阻塞主线程
-  Serial.println("🔍 开始异步 WiFi 扫描...");
-  int n = WiFi.scanNetworks(true, false);  // async=true, show_hidden=false
-  
-  // 等待扫描完成（最多等待 200ms）
-  int maxWait = 20;  // 20 * 10ms = 200ms
-  while (WiFi.scanComplete() < 0 && maxWait-- > 0) {
-    delay(10);  // 短延迟给扫描任务执行时间
-  }
-  
-  n = WiFi.scanComplete();
-  
-  String json = "[";
-  
-  // 限制返回的网络数量，避免 JSON 过大
-  for (int i = 0; i < n && i < 20; i++) {
-    if (i > 0) {
-      json += ",";
-    }
-    json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + WiFi.RSSI(i) + "}";
-  }
-  
-  json += "]";
+  // 使用同步扫描（阻塞式）- 比异步更可靠
+  // false: 不显示隐藏网络, true: 显示所有网络
+  int n = WiFi.scanNetworks(false, false);
   
   Serial.printf("✅ WiFi 扫描完成，找到 %d 个网络\n", n);
   
-  if (currentMode == WIFI_AP) {
-    WiFi.mode(WIFI_AP);
+  String json = "[";
+  
+  // 处理扫描结果
+  if (n > 0) {
+    // 限制返回的网络数量，避免 JSON 过大
+    for (int i = 0; i < n && i < 20; i++) {
+      if (i > 0) {
+        json += ",";
+      }
+      String ssid = WiFi.SSID(i);
+      int rssi = WiFi.RSSI(i);
+      // 过滤掉无效的 SSID
+      if (ssid.length() > 0) {
+        json += "{\"ssid\":\"" + ssid + "\",\"rssi\":" + rssi + "}";
+      }
+    }
+  } else if (n < 0) {
+    Serial.printf("❌ WiFi 扫描失败，错误码: %d\n", n);
   }
+  
+  json += "]";
   
   sendResponse(200, "application/json", json);
 }
