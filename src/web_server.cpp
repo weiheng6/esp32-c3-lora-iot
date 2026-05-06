@@ -362,9 +362,7 @@ void WebServerManager::handleSaveWiFi() {
 void WebServerManager::handleScanWiFi() {
   wifi_mode_t currentMode = WiFi.getMode();
   
-  if (currentMode == WIFI_AP) {
-    WiFi.mode(WIFI_AP_STA);
-  }
+  Serial.printf("🔍 开始 WiFi 扫描 (当前模式: %d)...\n", currentMode);
   
   // 使用同步扫描模式，确保获取完整结果
   Serial.println("🔍 开始 WiFi 扫描...");
