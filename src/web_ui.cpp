@@ -4,7 +4,9 @@
 #include "relay_control.h"
 #include "sensor.h"
 #include "condition_control.h"
+#include "ota_manager.h"
 #include <ArduinoJson.h>
+#include <Update.h>
 
 // 【声明外部全局变量】
 extern bool manualRelayMode;  // 来自 main.cpp
@@ -76,7 +78,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
 <body>
   <div class="container">
     <div class="header">
-      <h1>🔧 设备配置中心</h1>
+      <h1>🔧 设备配置中心-New</h1>
       <p>ESP32-C3 环境监测和控制系统</p>
     </div>
     
@@ -90,7 +92,8 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
         <button class="tab-btn" onclick="switchTab('control')">� 控制</button>
         <button class="tab-btn" onclick="switchTab('condition')">🎯 条件控制</button>
         <button class="tab-btn" onclick="switchTab('timer')">⏰ 定时控制</button>
-        <button class="tab-btn" onclick="switchTab('mqtt')">� MQTT</button>
+        <button class="tab-btn" onclick="switchTab('mqtt')">📡 MQTT</button>
+        <button class="tab-btn" onclick="switchTab('ota')">🔄 OTA升级</button>
         <button class="tab-btn" onclick="switchTab('settings')">⚙️ 设置</button>
       </div>
       
@@ -300,6 +303,70 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
           <div class="button-group">
             <button class="btn-primary" onclick="saveTimer()">💾 保存定时控制</button>
             <button class="btn-warning" onclick="loadTimer()">🔄 刷新当前配置</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- OTA升级标签页 -->
+      <div id="ota" class="tab-content">
+        <div class="section">
+          <h2>🔄 OTA固件升级</h2>
+          <div class="form-group">
+            <label>固件升级方式：</label>
+            <div class="button-group">
+              <button class="btn-primary" onclick="switchOTA('url')" id="otaUrlBtn">🌐 URL升级</button>
+              <button class="btn-primary" onclick="switchOTA('file')" id="otaFileBtn">📤 文件上传</button>
+            </div>
+          </div>
+          
+          <!-- URL升级方式 -->
+          <div id="otaUrlSection" class="section">
+            <h3>🌐 通过URL升级</h3>
+            <div class="form-group">
+              <label>固件URL：</label>
+              <input type="text" id="otaUrl" placeholder="https://example.com/firmware.bin" style="width: 100%;">
+              <div class="info-box">📍 请输入阿里云OSS上的固件文件URL</div>
+            </div>
+            <button class="btn-primary" onclick="startOTAFromURL()">🚀 开始升级</button>
+          </div>
+          
+          <!-- 文件上传方式 -->
+          <div id="otaFileSection" class="section" style="display: none;">
+            <h3>📤 上传固件文件</h3>
+            <div class="form-group">
+              <label>选择固件文件（.bin）：</label>
+              <input type="file" id="otaFile" accept=".bin" onchange="handleFileSelect()">
+              <div class="info-box">📍 支持ESP32固件格式（.bin文件）</div>
+            </div>
+            <div id="fileInfo" style="display: none; margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 6px;">
+              <span id="fileName"></span>
+              <span id="fileSize"></span>
+            </div>
+            <button class="btn-primary" onclick="uploadOTAFile()" id="uploadBtn" disabled>🚀 上传并升级</button>
+          </div>
+          
+          <!-- 升级进度 -->
+          <div id="otaProgressSection" class="section" style="display: none;">
+            <h3>⏳ 升级进度</h3>
+            <div style="background: #f0f0f0; border-radius: 6px; overflow: hidden; height: 30px;">
+              <div id="otaProgressBar" style="background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+            </div>
+            <div style="text-align: center; margin-top: 10px; font-weight: 600;">
+              <span id="otaProgressText">0%</span>
+            </div>
+            <div id="otaStatusText" style="text-align: center; margin-top: 10px; color: #666;"></div>
+            <button class="btn-danger" onclick="cancelOTA()" style="display: none;" id="cancelBtn">❌ 取消升级</button>
+          </div>
+          
+          <!-- 升级说明 -->
+          <div class="section" style="background: #e3f2fd; border-left-color: #2196f3;">
+            <h3>📖 升级说明</h3>
+            <ul style="margin-left: 20px; color: #555;">
+              <li>升级过程中请保持设备电源稳定</li>
+              <li>升级完成后设备将自动重启</li>
+              <li>升级期间请勿关闭浏览器页面</li>
+              <li>建议在网络稳定的环境下进行升级</li>
+            </ul>
           </div>
         </div>
       </div>
@@ -1004,6 +1071,122 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
       document.getElementById('currentTime').textContent = 
         `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
     }, 1000);
+    
+    // ============== OTA升级功能 ==============
+    function switchOTA(mode) {
+      document.getElementById('otaUrlSection').style.display = mode === 'url' ? 'block' : 'none';
+      document.getElementById('otaFileSection').style.display = mode === 'file' ? 'block' : 'none';
+      document.getElementById('otaUrlBtn').style.background = mode === 'url' ? '#667eea' : '#9e9e9e';
+      document.getElementById('otaFileBtn').style.background = mode === 'file' ? '#667eea' : '#9e9e9e';
+    }
+    
+    function handleFileSelect() {
+      const file = document.getElementById('otaFile').files[0];
+      if (file) {
+        document.getElementById('fileName').textContent = '文件名: ' + file.name;
+        document.getElementById('fileSize').textContent = ' | 大小: ' + (file.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('fileInfo').style.display = 'block';
+        document.getElementById('uploadBtn').disabled = false;
+      }
+    }
+    
+    function startOTAFromURL() {
+      const url = document.getElementById('otaUrl').value.trim();
+      if (!url) {
+        showAlert('请输入固件URL', 'error');
+        return;
+      }
+      
+      showOTAProgess();
+      
+      fetch(`${API_BASE}/api/ota/url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'ok') {
+          document.getElementById('otaStatusText').textContent = '正在下载固件...';
+          pollOTAStatus();
+        } else {
+          hideOTAProgess();
+          showAlert(data.msg || '升级失败', 'error');
+        }
+      })
+      .catch(e => {
+        hideOTAProgess();
+        showAlert('请求失败: ' + e, 'error');
+      });
+    }
+    
+    function uploadOTAFile() {
+      const file = document.getElementById('otaFile').files[0];
+      if (!file) {
+        showAlert('请选择固件文件', 'error');
+        return;
+      }
+      
+      showOTAProgess();
+      
+      const formData = new FormData();
+      formData.append('firmware', file);
+      
+      fetch(`${API_BASE}/api/ota/upload`, {
+        method: 'POST',
+        body: formData
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'ok') {
+          document.getElementById('otaStatusText').textContent = '正在升级...';
+        } else {
+          hideOTAProgess();
+          showAlert(data.msg || '上传失败', 'error');
+        }
+      })
+      .catch(e => {
+        hideOTAProgess();
+        showAlert('上传失败: ' + e, 'error');
+      });
+    }
+    
+    function showOTAProgess() {
+      document.getElementById('otaProgressSection').style.display = 'block';
+      document.getElementById('otaUrlSection').style.display = 'none';
+      document.getElementById('otaFileSection').style.display = 'none';
+      document.getElementById('otaProgressBar').style.width = '0%';
+      document.getElementById('otaProgressText').textContent = '0%';
+    }
+    
+    function hideOTAProgess() {
+      document.getElementById('otaProgressSection').style.display = 'none';
+      document.getElementById('otaUrlSection').style.display = 'block';
+    }
+    
+    function pollOTAStatus() {
+      fetch(`${API_BASE}/api/ota/status`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'updating') {
+          const progress = data.progress || 0;
+          document.getElementById('otaProgressBar').style.width = progress + '%';
+          document.getElementById('otaProgressText').textContent = progress + '%';
+          document.getElementById('otaStatusText').textContent = '正在下载... (' + progress + '%)';
+          setTimeout(pollOTAStatus, 1000);
+        } else if (data.status === 'completed') {
+          document.getElementById('otaProgressBar').style.width = '100%';
+          document.getElementById('otaProgressText').textContent = '100%';
+          document.getElementById('otaStatusText').textContent = '✅ 升级完成！设备重启中...';
+        } else if (data.status === 'failed') {
+          hideOTAProgess();
+          showAlert('升级失败: ' + (data.msg || '未知错误'), 'error');
+        }
+      })
+      .catch(e => {
+        setTimeout(pollOTAStatus, 2000);
+      });
+    }
   </script>
 </body>
 </html>
@@ -1026,6 +1209,14 @@ void WebUIManager::begin() {
   server.on("/api/restart", HTTP_POST, [this]() { this->handleRestart(); });
   server.on("/api/export", HTTP_GET, [this]() { this->handleExportConfig(); });
   server.on("/api/import", HTTP_POST, [this]() { this->handleImportConfig(); });
+  
+  // OTA升级端点
+  server.on("/api/ota/url", HTTP_POST, [this]() { this->handleOTAURL(); });
+  server.on("/api/ota/upload", HTTP_POST, 
+    [this]() { this->handleOTAUpload(); },  // 上传完成时的处理
+    [this]() { this->handleOTAUpload(); }   // 上传过程中的处理
+  );
+  server.on("/api/ota/status", HTTP_GET, [this]() { this->handleOTAStatus(); });
   
   server.begin();
   isStarted = true;
@@ -1144,6 +1335,217 @@ void WebUIManager::handleRestart() {
   server.send(200, "application/json", "{\"status\":\"ok\",\"msg\":\"Restarting...\"}");
   delay(1000);
   ESP.restart();
+}
+
+// ==================== OTA升级 API 端点 ====================
+void WebUIManager::handleOTAURL() {
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, server.arg("plain"));
+  
+  if (error) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"JSON解析失败\"}");
+    return;
+  }
+  
+  if (!doc.containsKey("url")) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"缺少URL参数\"}");
+    return;
+  }
+  
+  String url = doc["url"].as<String>();
+  Serial.printf("🔄 [OTA] 收到URL升级请求: %s\n", url.c_str());
+  
+  // 启动OTA升级（在新线程中执行）
+  xTaskCreatePinnedToCore([](void *parameter) {
+    String url = *(String*)parameter;
+    otaManager.updateFromHTTP(url);
+    vTaskDelete(NULL);
+  }, "OTAUpdate", 4096, new String(url), 5, NULL, 1);
+  
+  server.send(200, "application/json", "{\"status\":\"ok\",\"msg\":\"升级已开始\"}");
+}
+
+void WebUIManager::handleOTAUpload() {
+  HTTPUpload& upload = server.upload();
+  static bool uploadStarted = false;
+  static bool uploadFailed = false;
+  static String uploadFilename = "";
+  static size_t totalWritten = 0;
+  
+  // 调试：输出当前上传状态
+  Serial.printf("📤 [OTA] 上传状态: %d, 文件名: '%s', 已写: %u, 总计: %u\n", 
+                upload.status, upload.filename.c_str(), upload.currentSize, upload.totalSize);
+  
+  if (upload.status == UPLOAD_FILE_START) {
+    uploadFilename = upload.filename;
+    totalWritten = 0;
+    Serial.printf("\n📤 [OTA] ========== 开始接收固件文件 ==========\n");
+    Serial.printf("📤 [OTA] 文件名: %s\n", uploadFilename.c_str());
+    
+    // 检查是否有足够的空间
+    size_t freeSpace = ESP.getFreeSketchSpace();
+    Serial.printf("📦 [OTA] 可用空间: %u bytes\n", freeSpace);
+    
+    // 检查Update是否已在进行中
+    if (Update.isRunning()) {
+      Serial.println("❌ [OTA] Update已在运行中");
+      uploadFailed = true;
+      return;
+    }
+    
+    Serial.println("🔧 [OTA] 尝试初始化Update...");
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      int err = Update.getError();
+      Serial.printf("❌ [OTA] Update.begin() 失败，错误码: %d\n", err);
+      switch (err) {
+        case UPDATE_ERROR_OK: Serial.println("   → 无错误（但仍失败）"); break;
+        case UPDATE_ERROR_WRITE: Serial.println("   → 写入错误"); break;
+        case UPDATE_ERROR_ERASE: Serial.println("   → 擦除错误"); break;
+        case UPDATE_ERROR_READ: Serial.println("   → 读取错误"); break;
+        case UPDATE_ERROR_SIZE: Serial.println("   → 大小错误"); break;
+        case UPDATE_ERROR_SPACE: Serial.println("   → 空间不足"); break;
+        case UPDATE_ERROR_ABORT: Serial.println("   → 已中止"); break;
+        default: Serial.printf("   → 未知错误\n");
+      }
+      uploadFailed = true;
+      otaManager.setStatus(OTA_STATUS_FAILED);
+    } else {
+      Serial.println("✅ [OTA] Update.begin() 成功");
+      uploadStarted = true;
+      uploadFailed = false;
+      otaManager.setStatus(OTA_STATUS_UPDATING);
+      otaManager.setProgress(0);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (uploadFailed) return;
+    
+    // 关键修复：如果UPLOAD_FILE_START没有触发，在这里初始化
+    if (!uploadStarted) {
+      Serial.println("⚠️ [OTA] UPLOAD_FILE_START未触发，在WRITE时初始化...");
+      uploadFilename = upload.filename;
+      totalWritten = 0;
+      
+      size_t freeSpace = ESP.getFreeSketchSpace();
+      Serial.printf("📦 [OTA] 可用空间: %u bytes\n", freeSpace);
+      
+      if (Update.isRunning()) {
+        Serial.println("❌ [OTA] Update已在运行中");
+        uploadFailed = true;
+        return;
+      }
+      
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        int err = Update.getError();
+        Serial.printf("❌ [OTA] Update.begin() 失败，错误码: %d\n", err);
+        uploadFailed = true;
+        otaManager.setStatus(OTA_STATUS_FAILED);
+        return;
+      }
+      
+      Serial.println("✅ [OTA] Update.begin() 成功（延迟初始化）");
+      uploadStarted = true;
+      otaManager.setStatus(OTA_STATUS_UPDATING);
+      otaManager.setProgress(0);
+    }
+    
+    size_t written = Update.write(upload.buf, upload.currentSize);
+    totalWritten += written;
+    
+    // 更新进度
+    int progress = 0;
+    if (upload.totalSize > 0) {
+      progress = (totalWritten * 100) / upload.totalSize;
+      otaManager.setProgress(progress);
+    }
+    
+    Serial.printf("📤 [OTA] 写入数据: %u bytes, 累计: %u bytes, 进度: %d%%\n", 
+                  upload.currentSize, totalWritten, progress);
+    
+    if (written != upload.currentSize) {
+      Serial.printf("❌ [OTA] 写入失败，错误: %d\n", Update.getError());
+      uploadFailed = true;
+      otaManager.setStatus(OTA_STATUS_FAILED);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    Serial.println("📤 [OTA] 上传结束事件触发");
+    
+    if (uploadFailed) {
+      Serial.println("❌ [OTA] 上传失败（之前已标记失败）");
+      server.send(500, "application/json", "{\"status\":\"error\",\"msg\":\"上传过程中发生错误\"}");
+      uploadStarted = false;
+      return;
+    }
+    
+    if (!uploadStarted) {
+      Serial.println("❌ [OTA] uploadStarted为false，无法完成升级");
+      server.send(500, "application/json", "{\"status\":\"error\",\"msg\":\"上传未正确开始\"}");
+      return;
+    }
+    
+    Serial.printf("📦 [OTA] 上传文件大小: %u bytes, 实际写入: %u bytes\n", upload.totalSize, totalWritten);
+    
+    if (Update.end(true)) {
+      Serial.printf("✅ [OTA] 固件上传完成，大小: %u bytes\n", upload.totalSize);
+      otaManager.setProgress(100);
+      otaManager.setStatus(OTA_STATUS_COMPLETED);
+      server.sendHeader("Connection", "close");
+      server.send(200, "application/json", "{\"status\":\"ok\",\"msg\":\"升级完成，设备重启中...\"}");
+      delay(100);
+      ESP.restart();
+    } else {
+      int errorCode = Update.getError();
+      Serial.printf("❌ [OTA] 更新结束失败，错误码: %d，实际大小: %u\n", errorCode, upload.totalSize);
+      
+      otaManager.setStatus(OTA_STATUS_FAILED);
+      
+      String errorMsg;
+      if (errorCode == UPDATE_ERROR_OK) {
+        errorMsg = "固件验证失败，可能是文件损坏或不兼容";
+      } else {
+        switch (errorCode) {
+          case UPDATE_ERROR_WRITE: errorMsg = "写入错误"; break;
+          case UPDATE_ERROR_ERASE: errorMsg = "擦除错误"; break;
+          case UPDATE_ERROR_READ: errorMsg = "读取错误"; break;
+          case UPDATE_ERROR_SIZE: errorMsg = "大小错误"; break;
+          case UPDATE_ERROR_SPACE: errorMsg = "空间不足"; break;
+          case UPDATE_ERROR_ABORT: errorMsg = "升级被中止"; break;
+          default: errorMsg = "未知错误 (" + String(errorCode) + ")";
+        }
+      }
+      
+      server.send(500, "application/json", "{\"status\":\"error\",\"msg\":\"" + errorMsg + "\"}");
+    }
+    
+    uploadStarted = false;
+    totalWritten = 0;
+  }
+}
+
+void WebUIManager::handleOTAStatus() {
+  StaticJsonDocument<100> doc;
+  
+  OTAManagerStatus status = otaManager.getStatus();
+  int progress = otaManager.getProgress();
+  
+  switch (status) {
+    case OTA_STATUS_IDLE:
+      doc["status"] = "idle";
+      break;
+    case OTA_STATUS_UPDATING:
+      doc["status"] = "updating";
+      doc["progress"] = progress;
+      break;
+    case OTA_STATUS_COMPLETED:
+      doc["status"] = "completed";
+      break;
+    case OTA_STATUS_FAILED:
+      doc["status"] = "failed";
+      break;
+  }
+  
+  String json;
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
 }
 
 void WebUIManager::handleExportConfig() {

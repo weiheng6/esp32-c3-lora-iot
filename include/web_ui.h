@@ -25,6 +25,11 @@ private:
   void handleExportConfig();
   void handleImportConfig();
   
+  // OTA升级相关函数
+  void handleOTAURL();
+  void handleOTAUpload();
+  void handleOTAStatus();
+  
 public:
   WebUIManager(uint16_t port = 80);
   void begin();
