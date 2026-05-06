@@ -298,6 +298,44 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     ESP.restart();
   }
   
+  // 处理 MQTT OTA 升级
+  if (doc.containsKey("ota")) {
+    JsonObject otaObj = doc["ota"].as<JsonObject>();
+    
+    if (otaObj.containsKey("url")) {
+      String otaUrl = otaObj["url"].as<String>();
+      Serial.printf("\n🔄 [OTA] 收到MQTT升级请求: %s\n", otaUrl.c_str());
+      
+      if (otaUrl.length() > 0) {
+        // 上报开始升级
+        mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"ok\",\"message\":\"OTA update started\"}");
+        
+        // 执行升级
+        bool success = otaManager.updateFromHTTP(otaUrl);
+        
+        if (success) {
+          Serial.println("✅ [OTA] MQTT升级成功，设备将重启");
+          mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"ok\",\"message\":\"OTA update successful, restarting...\"}");
+        } else {
+          Serial.println("❌ [OTA] MQTT升级失败");
+          mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"error\",\"message\":\"OTA update failed\"}");
+        }
+      } else {
+        Serial.println("❌ [OTA] OTA URL为空");
+        mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"error\",\"message\":\"OTA URL is empty\"}");
+      }
+    }
+    
+    if (otaObj.containsKey("status")) {
+      // 查询OTA状态
+      int status = otaManager.getStatus();
+      int progress = otaManager.getProgress();
+      char response[100];
+      snprintf(response, sizeof(response), "{\"status\":\"ok\",\"ota_status\":%d,\"progress\":%d}", status, progress);
+      mqttManager.publish(mqttManager.getRespTopic(), response);
+    }
+  }
+  
   #if DEBUG_MODE
   unsigned long callbackDuration = millis() - callbackStart;
   if (callbackDuration > 50) {

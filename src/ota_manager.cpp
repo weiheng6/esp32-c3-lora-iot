@@ -110,8 +110,11 @@ bool OTAManager::updateFromHTTP(const String& url) {
   }
   
   // 设置回调函数
-  Update.onProgress([this](unsigned int progress, unsigned int total) {
+  int lastReportedProgress = -1;
+  Update.onProgress([this, &lastReportedProgress](unsigned int progress, unsigned int total) {
     this->otaProgress = (progress * 100) / total;
+    
+    // 串口日志（每秒一次）
     static unsigned long lastPrintTime = 0;
     if (millis() - lastPrintTime > 1000) {
       lastPrintTime = millis();
