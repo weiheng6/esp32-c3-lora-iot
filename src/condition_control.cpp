@@ -228,31 +228,34 @@ void ConditionControl::setLogicMode(bool andMode) {
 
 bool ConditionControl::checkConditions(float temperature, float humidity) {
   if (!enabled) {
-    // 【关键修复】当条件控制被禁用时，返回当前继电器状态，不进行任何判断
     return relayControl.getState();
   }
   
   bool currentRelayState = relayControl.getState();
   
-  // 【新增】首先检查 OFF 条件组 - 如果满足则关闭
+  // 首先检查 OFF 条件组 - 如果满足则关闭
   if (offConditionGroup.enabled && offConditionGroup.evaluate(temperature, humidity)) {
     LOG_TRIGGER("📵 OFF条件满足 - 继电器将关闭");
     return false;
   }
   
-  // 【新增】检查 ON 条件组 - 如果满足则打开
+  // 检查 ON 条件组 - 如果满足则打开
   if (onConditionGroup.enabled && onConditionGroup.evaluate(temperature, humidity)) {
     LOG_TRIGGER("✅ ON条件满足 - 继电器将开启");
     return true;
   }
   
-  // 如果 ON 条件组未启用，使用旧的条件逻辑（向后兼容）
-  if (!onConditionGroup.enabled && !offConditionGroup.enabled) {
+  // 【关键修复】即使新条件组启用了，也要检查旧条件是否有任何一个启用
+  // 如果新条件组没有任何有效条件（conditionCount == 0），则使用旧逻辑
+  bool hasOldConditions = tempConditionEnabled || humiConditionEnabled;
+  bool newGroupHasConditions = onConditionGroup.enabled && onConditionGroup.conditionCount > 0;
+  
+  // 只有当新条件组没有有效条件时，才使用旧的条件逻辑
+  if (!newGroupHasConditions || hasOldConditions) {
     bool tempConditionMet = false;
     bool humiConditionMet = false;
     
     if (useHysteresis) {
-      // 滞回控制逻辑
       if (tempConditionEnabled) {
         if (temperature > tempHighThreshold) {
           tempConditionMet = true;
@@ -273,7 +276,6 @@ bool ConditionControl::checkConditions(float temperature, float humidity) {
         }
       }
     } else {
-      // 单阈值控制逻辑
       if (tempConditionEnabled) {
         switch (tempCompareOp) {
           case COMPARE_GREATER_THAN:
@@ -322,7 +324,7 @@ bool ConditionControl::checkConditions(float temperature, float humidity) {
     }
     
     if (!tempConditionEnabled && !humiConditionEnabled) {
-      return false;
+      return currentRelayState;
     }
     
     bool finalCondition = false;
@@ -337,13 +339,12 @@ bool ConditionControl::checkConditions(float temperature, float humidity) {
     }
     
     if (finalCondition) {
-      LOG_TRIGGER("⚡ 旧条件逻辑满足 - 继电器将开启");
+      LOG_TRIGGER("⚡ 条件满足 - 继电器将开启");
     }
     
     return finalCondition;
   }
   
-  // 默认保持当前状态
   return currentRelayState;
 }
 

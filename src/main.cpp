@@ -62,6 +62,66 @@ static uint32_t i2cResetCount = 0;  // I2C 总线复位计数
 #define MQTT_RECONNECT_INTERVAL 5000  // 5秒重连一次
 #define MQTT_RECONNECT_MAX_INTERVAL 60000  // 最多等60秒
 
+// ==================== 状态查询处理函数 ====================
+void handleStatusQuery(const String& queryType, JsonDocument& responseDoc) {
+  Serial.printf("🔍 处理状态查询: %s\n", queryType.c_str());
+  
+  // 设备开关状态
+  if (queryType == "relay" || queryType == "all") {
+    JsonObject relayObj = responseDoc.createNestedObject("relay");
+    relayObj["state"] = relayControl.getState() ? 1 : 0;
+    relayObj["manual_mode"] = manualRelayMode;
+  }
+  
+  // 条件控制详情
+  if (queryType == "condition" || queryType == "all") {
+    // 解析条件控制的JSON响应并合并到responseDoc
+    String conditionJson = conditionControl.toJSON();
+    StaticJsonDocument<600> conditionDoc;
+    deserializeJson(conditionDoc, conditionJson);
+    responseDoc["condition"] = conditionDoc.as<JsonObject>();
+  }
+  
+  // 定时控制详情
+  if (queryType == "timer" || queryType == "all") {
+    // 解析定时控制的JSON响应并合并到responseDoc
+    String timerJson = conditionControl.getTimerJSON();
+    StaticJsonDocument<500> timerDoc;
+    deserializeJson(timerDoc, timerJson);
+    responseDoc["timer"] = timerDoc.as<JsonObject>();
+  }
+  
+  // 网络状态
+  if (queryType == "network" || queryType == "all") {
+    JsonObject networkObj = responseDoc.createNestedObject("network");
+    networkObj["wifi_connected"] = (WiFi.status() == WL_CONNECTED);
+    networkObj["mqtt_connected"] = mqttManager.isConnected();
+    networkObj["rssi"] = WiFi.RSSI();
+    if (WiFi.status() == WL_CONNECTED) {
+      networkObj["ip"] = WiFi.localIP().toString();
+    }
+  }
+  
+  // 设备信息
+  if (queryType == "device" || queryType == "all") {
+    JsonObject deviceObj = responseDoc.createNestedObject("device");
+    deviceObj["id"] = mqttManager.getDeviceId();
+    deviceObj["status"] = deviceStatus;
+    deviceObj["free_heap"] = ESP.getFreeHeap();
+    deviceObj["heap_size"] = ESP.getHeapSize();
+  }
+  
+  // 传感器数据
+  if (queryType == "sensor" || queryType == "all") {
+    float temperature, humidity;
+    if (sensorManager.readBoth(temperature, humidity)) {
+      JsonObject sensorObj = responseDoc.createNestedObject("sensor");
+      sensorObj["temperature"] = temperature;
+      sensorObj["humidity"] = humidity;
+    }
+  }
+}
+
 // ==================== MQTT 消息回调 ====================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   #if DEBUG_MODE
@@ -149,11 +209,48 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
   }
   
-  // 处理主动查询
-  if (doc.containsKey("query") && doc["query"] == true) {
-    needReport = true;
-    Serial.println("📢 收到主动查询指令");
-    mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"ok\",\"message\":\"Query received\"}");
+  // 处理主动查询（支持多种查询类型）
+  if (doc.containsKey("query")) {
+    JsonVariant queryVariant = doc["query"];
+    
+    // 兼容旧格式: {"query": true}
+    if (queryVariant.is<bool>() && queryVariant.as<bool>()) {
+      needReport = true;
+      Serial.println("📢 收到主动查询指令");
+      mqttManager.publish(mqttManager.getRespTopic(), "{\"status\":\"ok\",\"message\":\"Query received\"}");
+    }
+    // 新格式: {"query": {"type": "xxx"}} 或 {"query": {"types": ["xxx", "yyy"]}}
+    else if (queryVariant.is<JsonObject>()) {
+      JsonObject queryObj = queryVariant.as<JsonObject>();
+      
+      // 构建响应文档
+      StaticJsonDocument<800> responseDoc;
+      responseDoc["status"] = "ok";
+      
+      // 处理单个类型查询
+      if (queryObj.containsKey("type")) {
+        String queryType = queryObj["type"].as<String>();
+        handleStatusQuery(queryType, responseDoc);
+      }
+      // 处理多个类型查询
+      else if (queryObj.containsKey("types")) {
+        JsonArray typesArray = queryObj["types"].as<JsonArray>();
+        for (JsonVariant type : typesArray) {
+          String queryType = type.as<String>();
+          handleStatusQuery(queryType, responseDoc);
+        }
+      }
+      // 默认查询所有状态
+      else {
+        handleStatusQuery("all", responseDoc);
+      }
+      
+      // 发布响应
+      String response;
+      serializeJson(responseDoc, response);
+      mqttManager.publish(mqttManager.getRespTopic(), response.c_str());
+      Serial.printf("📤 已发布状态查询响应: %s\n", response.c_str());
+    }
   }
   
   // 处理条件控制配置
@@ -162,6 +259,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     
     if (conditionObj.containsKey("enabled")) {
       bool conditionEnabled = conditionObj["enabled"].as<bool>();
+      bool previousEnabled = conditionControl.isEnabled();
       conditionControl.setEnabled(conditionEnabled);
       LOG_CMDF("� 条件控制%s", conditionControl.isEnabled() ? "已启用" : "已禁用");
       
@@ -171,9 +269,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         LOG_CMD("⏰ 定时控制已自动禁用");
       }
       
+      // 【新增】条件控制启用/禁用状态变化时，立即发布MQTT响应
+      if (previousEnabled != conditionEnabled) {
+        char response[60];
+        snprintf(response, sizeof(response), 
+                 "{\"status\":\"ok\",\"condition_enabled\":%s}", 
+                 conditionEnabled ? "true" : "false");
+        mqttManager.publish(mqttManager.getRespTopic(), response);
+        Serial.printf("📤 条件控制%s - 已发布响应\n", conditionEnabled ? "已启用" : "已禁用");
+      }
+      
       // 【关键修复】如果禁用条件控制，则不处理其他条件参数，直接返回
       if (!conditionEnabled) {
-        mqttManager.publish(mqttManager.getRespTopic(), conditionControl.toJSON().c_str());
         return;
       }
     }
@@ -181,13 +288,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     // 处理普通条件控制配置
     if (!conditionObj.containsKey("use_hysteresis") || !conditionObj["use_hysteresis"].as<bool>()) {
       // 单阈值模式
+      bool hasTempCondition = false, hasHumiCondition = false;
+      
       if (conditionObj.containsKey("temp") && conditionObj["temp"].is<JsonObject>()) {
         JsonObject tempObj = conditionObj["temp"].as<JsonObject>();
         if (tempObj.containsKey("enabled")) {
           bool enabled = tempObj["enabled"];
           float threshold = tempObj.containsKey("threshold") ? tempObj["threshold"].as<float>() : 25.0;
           int compareOp = tempObj.containsKey("compare") ? tempObj["compare"].as<int>() : COMPARE_GREATER_THAN;
+          
+          // 同时设置旧的条件变量（兼容性）和新的条件组
           conditionControl.setTempCondition(enabled, threshold, compareOp);
+          conditionControl.setCondition(true, 0, enabled, SENSOR_TEMP, compareOp, threshold);
+          
+          hasTempCondition = enabled;
           LOG_CMDF("🌡️  温度条件：%s (阈值:%.1f°C)", enabled ? "启用" : "禁用", threshold);
         }
       }
@@ -198,7 +312,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           bool enabled = humiObj["enabled"];
           float threshold = humiObj.containsKey("threshold") ? humiObj["threshold"].as<float>() : 60.0;
           int compareOp = humiObj.containsKey("compare") ? humiObj["compare"].as<int>() : COMPARE_GREATER_THAN;
+          
+          // 同时设置旧的条件变量（兼容性）和新的条件组
           conditionControl.setHumiCondition(enabled, threshold, compareOp);
+          conditionControl.setCondition(true, 1, enabled, SENSOR_HUMI, compareOp, threshold);
+          
+          hasHumiCondition = enabled;
           LOG_CMDF("💧 湿度条件：%s (阈值:%.1f%%)", enabled ? "启用" : "禁用", threshold);
         }
       }
@@ -206,7 +325,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       if (conditionObj.containsKey("logic")) {
         bool andMode = (conditionObj["logic"].as<String>() == "and");
         conditionControl.setLogicMode(andMode);
+        conditionControl.setConditionGroupLogic(true, andMode ? LOGIC_AND : LOGIC_OR);
         LOG_CMDF("🔗 逻辑模式：%s", andMode ? "AND" : "OR");
+      }
+      
+      // 启用 ON 条件组（如果有任何条件启用）
+      if (hasTempCondition || hasHumiCondition) {
+        conditionControl.setConditionGroupEnabled(true, true);
       }
     }
     
@@ -229,11 +354,33 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         humiLow = humiObj.containsKey("low_threshold") ? humiObj["low_threshold"].as<float>() : 60.0;
       }
       
+      // 启用滞回控制
       conditionControl.setHysteresis(true, tempHigh, tempLow, humiHigh, humiLow);
+      
+      // 设置温度和湿度条件（旧方式，兼容性）
+      conditionControl.setTempCondition(tempEnabled, tempHigh, COMPARE_GREATER_THAN);
+      conditionControl.setHumiCondition(humiEnabled, humiHigh, COMPARE_GREATER_THAN);
+      
+      // 【关键修复】同时设置新的条件组，确保条件检查能生效
+      conditionControl.setCondition(true, 0, tempEnabled, SENSOR_TEMP, COMPARE_GREATER_THAN, tempHigh);
+      conditionControl.setCondition(true, 1, humiEnabled, SENSOR_HUMI, COMPARE_GREATER_THAN, humiHigh);
+      conditionControl.setConditionGroupLogic(true, LOGIC_OR);  // 滞回模式使用 OR 逻辑
+      
+      // 如果有任何条件启用，启用 ON 条件组
+      if (tempEnabled || humiEnabled) {
+        conditionControl.setConditionGroupEnabled(true, true);
+      }
+      
+      // 确保条件控制已启用
+      if (!conditionControl.isEnabled()) {
+        conditionControl.setEnabled(true);
+      }
+      
       if (tempEnabled) LOG_CMDF("🌡️  温度滞回：%.1f°C(高) - %.1f°C(低)", tempHigh, tempLow);
       if (humiEnabled) LOG_CMDF("💧 湿度滞回：%.1f%%(高) - %.1f%%(低)", humiHigh, humiLow);
     }
     
+    // 发送响应
     mqttManager.publish(mqttManager.getRespTopic(), conditionControl.toJSON().c_str());
   }
   
@@ -404,6 +551,9 @@ void checkNetworkConnection() {
   }
 }
 
+// 全局变量：记录上次继电器状态，用于检测变化
+static bool lastRelayState = false;
+
 // ==================== 采集传感器数据 ====================
 void acquireSensorData() {
   float temperature, humidity;
@@ -423,6 +573,9 @@ void acquireSensorData() {
     Serial.print(humidity);
     Serial.println(" %RH");
     
+    // 记录继电器状态变化前的值
+    bool previousRelayState = relayControl.getState();
+    
     // 【关键修复】只在非手动模式下才执行自动控制
     if (!manualRelayMode) {
       // 执行条件控制或定时控制
@@ -431,6 +584,27 @@ void acquireSensorData() {
       } else {
         relayControl.turnOff();
       }
+    }
+    
+    // 检查继电器状态是否发生变化
+    bool currentRelayState = relayControl.getState();
+    if (previousRelayState != currentRelayState) {
+      Serial.printf("🔌 继电器状态变化: %s -> %s\n", 
+                    previousRelayState ? "开启" : "关闭", 
+                    currentRelayState ? "开启" : "关闭");
+      
+      // 【新增】继电器状态变化时发布MQTT响应
+      if (hasNetworkConnection && mqttManager.isConnected()) {
+        char response[50];
+        snprintf(response, sizeof(response), 
+                 "{\"status\":\"ok\",\"relay\":%d,\"reason\":\"auto\"}", 
+                 currentRelayState ? 1 : 0);
+        mqttManager.publish(mqttManager.getRespTopic(), response);
+        Serial.printf("📤 已发布继电器状态变化: %s\n", response);
+      }
+      
+      // 更新上次状态记录
+      lastRelayState = currentRelayState;
     }
   } else {
     i2cFailureCount++;
@@ -587,14 +761,12 @@ void setup() {
 void loop() {
   unsigned long loopStart = millis();
   unsigned long currentTime = loopStart;
+  bool wifiConnected = (WiFi.status() == WL_CONNECTED);
   
   // 检查网络连接
-  unsigned long step1Start = millis();
   checkNetworkConnection();
-  unsigned long step1Duration = millis() - step1Start;
   
   // 定期检查 WiFi
-  unsigned long step2Start = millis();
   if (currentTime - lastWifiCheckTime >= WIFI_CHECK_INTERVAL) {
     lastWifiCheckTime = currentTime;
     wifiManager.connect();
@@ -602,116 +774,85 @@ void loop() {
     // 如果 WiFi 刚连接，启动 Web UI
     static bool webUIStarted = false;
     static bool mgmtInfoPublished = false;
-    if (WiFi.status() == WL_CONNECTED && !webUIStarted) {
+    if (wifiConnected && !webUIStarted) {
       webUIStarted = true;
       if (!webUIManager.isRunning()) {
         webUIManager.begin();
-        Serial.printf("✅ Web UI 已启动（WiFi 连接后）- 访问地址：http://%s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("✅ Web UI 已启动 - http://%s\n", WiFi.localIP().toString().c_str());
       }
     }
     
     // 如果 WiFi 已连接且 MQTT 已连接，推送管理信息一次
-    if (WiFi.status() == WL_CONNECTED && mqttManager.isConnected() && !mgmtInfoPublished) {
+    if (wifiConnected && mqttManager.isConnected() && !mgmtInfoPublished) {
       mgmtInfoPublished = true;
       mqttManager.publishManagementInfo(WiFi.localIP().toString().c_str());
     }
   }
-  unsigned long step2Duration = millis() - step2Start;
   
   // 连接 MQTT（带重连机制）
-  unsigned long step3Start = millis();
-  if (!mqttManager.isConnected() && WiFi.status() == WL_CONNECTED) {
+  if (!mqttManager.isConnected() && wifiConnected) {
     if (currentTime - lastMqttConnectAttempt >= MQTT_RECONNECT_INTERVAL) {
       lastMqttConnectAttempt = currentTime;
-      Serial.println("🔄 尝试重新连接 MQTT 服务器...");
+      Serial.println("🔄 尝试重新连接 MQTT...");
       mqttManager.connect();
     }
   } else if (mqttManager.isConnected()) {
-    // 连接成功，重置重连时间（这样断开后立即尝试重连）
     lastMqttConnectAttempt = 0;
   }
-  unsigned long step3Duration = millis() - step3Start;
   
   // MQTT 循环
-  unsigned long step4Start = millis();
   mqttManager.loop();
-  unsigned long step4Duration = millis() - step4Start;
   
   // 处理 HTTP 请求
-  unsigned long step5Start = millis();
   webServerManager.handleClient();
-  webUIManager.handleClient();  // 增强的 Web UI
-  unsigned long step5Duration = millis() - step5Start;
+  webUIManager.handleClient();
   
-  // 处理 LoRa 消息
-  unsigned long step6Start = millis();
+  // 处理 LoRa 消息和队列
   String loraMessage = loraManager.receiveMessage();
   if (loraMessage.length() > 0) {
     loraManager.parseMessage(loraMessage);
   }
-  unsigned long step6Duration = millis() - step6Start;
-  
-  // 处理 LoRa 队列
-  unsigned long step7Start = millis();
   loraManager.processQueue();
-  unsigned long step7Duration = millis() - step7Start;
   
   // 定期采集传感器数据
-  unsigned long step8Start = millis();
   if (currentTime - lastAcquisitionTime >= DEFAULT_ACQUISITION_INTERVAL) {
     lastAcquisitionTime = currentTime;
     acquireSensorData();
   }
-  unsigned long step8Duration = millis() - step8Start;
   
   // 定期上报数据到 MQTT
-  unsigned long step9Start = millis();
   if (currentTime - lastMqttReportTime >= mqttReportInterval || needReport) {
     lastMqttReportTime = currentTime;
+    needReport = false;
     
     if (hasNetworkConnection) {
       reportSensorDataToMqtt();
     } else {
       Serial.println("⚠️  网络连接不可用，跳过本次上报");
     }
-    
-    needReport = false;
   }
-  unsigned long step9Duration = millis() - step9Start;
   
   // 定期输出系统状态和内存监控
-  unsigned long step10Start = millis();
   if (currentTime - lastNodeDiscoveryTime >= SYSTEM_STATS_INTERVAL) {
     lastNodeDiscoveryTime = currentTime;
     systemMonitor.printStats();
     systemMonitor.checkMemory();
     
-    // 输出内存状态
     unsigned long freeHeap = ESP.getFreeHeap();
     unsigned long totalHeap = ESP.getHeapSize();
     float usagePercent = 100.0 * (totalHeap - freeHeap) / totalHeap;
-    Serial.printf("💾 内存状态 - 可用：%lu 字节，使用率：%.1f%%，警告线：%d 字节\n", 
-                  freeHeap, usagePercent, MEM_THRESHOLD);
+    Serial.printf("💾 内存: %lu/%lu (%.1f%%)\n", freeHeap, totalHeap, usagePercent);
   }
-  unsigned long step10Duration = millis() - step10Start;
   
   // LoRa 节点发现
-  unsigned long step11Start = millis();
   if (currentTime - lastHeartbeatTime >= LORA_NODE_DISCOVERY_INTERVAL) {
     lastHeartbeatTime = currentTime;
     loraManager.sendDiscovery(String(mqttManager.getDeviceId()), hasNetworkConnection);
   }
-  unsigned long step11Duration = millis() - step11Start;
   
-  // 处理 OTA 固件升级
-  unsigned long step12Start = millis();
+  // 处理 OTA 固件升级和故障恢复
   otaManager.handle();
-  unsigned long step12Duration = millis() - step12Start;
-  
-  // 故障恢复检查和自动恢复
-  unsigned long step13Start = millis();
   errorRecovery.checkAndRecover();
-  unsigned long step13Duration = millis() - step13Start;
   
   // 小延迟避免看门狗重启，并给系统任务（WiFi、蓝牙等）足够的 CPU 时间
   delay(20);  // 20ms 延迟
