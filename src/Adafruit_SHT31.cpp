@@ -30,11 +30,11 @@ bool Adafruit_SHT31::readData() {
   
   uint16_t rawTemp = _wire->read() << 8;
   rawTemp |= _wire->read();
-  uint8_t crcTemp = _wire->read();
+  (void)_wire->read();
   
   uint16_t rawHumi = _wire->read() << 8;
   rawHumi |= _wire->read();
-  uint8_t crcHumi = _wire->read();
+  (void)_wire->read();
   
   // 计算实际温度和湿度
   _lastTemp = -45.0 + (175.0 * rawTemp / 65535.0);

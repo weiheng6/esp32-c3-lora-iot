@@ -56,7 +56,6 @@ static uint32_t i2cFailureCount = 0;
 static uint32_t mqttFailureCount = 0;
 static uint32_t loopSlowCount = 0;  // 100ms+ 的 loop 计数
 static unsigned long lastLoopDuration = 0;
-static unsigned long lastI2CResetTime = 0;
 static uint32_t i2cResetCount = 0;  // I2C 总线复位计数
 
 // MQTT 重连机制配置

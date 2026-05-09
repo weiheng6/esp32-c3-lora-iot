@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package device;
+
+enum CommandType {
+  RELAY_CONTROL = 0;
+  CONFIG_UPDATE = 1;
+  OTA_UPGRADE = 2;
+  FACTORY_RESET = 3;
+}
+
+message SensorReading {
+  string sensor_type = 1;
+  double value = 2;
+  int32 raw_value = 3;
+}
+
+message SensorData {
+  string device_id = 1;
+  int64 timestamp = 2;
+  repeated SensorReading readings = 3;
+  int32 battery_level = 4;
+  int32 signal_strength = 5;
+}
+
+message DeviceCommand {
+  string device_id = 1;
+  string command_id = 2;
+  CommandType type = 3;
+  repeated string params = 4;
+}
+
+message NetworkStatus {
+  int32 wifi_rssi = 1;
+  bool mqtt_connected = 2;
+  int32 lora_nodes = 3;
+}
+
+message DeviceConfig {
+  string device_id = 1;
+  int32 acquisition_interval = 2;
+  int32 report_interval = 3;
+  bool relay_enabled = 4;
+  float temp_threshold_high = 5;
+  float temp_threshold_low = 6;
+  float hum_threshold_high = 7;
+  float hum_threshold_low = 8;
+  int32 lora_frequency = 9;
+  int32 mqtt_qos = 10;
+}
