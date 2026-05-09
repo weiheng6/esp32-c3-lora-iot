@@ -15,6 +15,7 @@
 #include "web_ui.h"
 #include "ota_manager.h"
 #include "error_recovery.h"
+#include "ntp_client.h"
 
 // ==================== 全局常量定义 ====================
 const char* MQTT_SERVER = "iot.kebaidata.com";
@@ -718,27 +719,30 @@ void setup() {
   // 2. WiFi
   wifiManager.begin();
   
-  // 3. MQTT
+  // 3. NTP客户端（使用阿里云NTP服务器）
+  ntpClient.begin("ntp.aliyun.com", 123, 8 * 3600);
+  
+  // 4. MQTT
   mqttManager.begin();
   mqttManager.setCallback(mqttCallback);
   
-  // 4. LoRa
+  // 5. LoRa
   loraManager.begin();
   
-  // 5. 继电器
+  // 6. 继电器
   relayControl.begin();
   
-  // 6. 条件控制
+  // 7. 条件控制
   conditionControl.begin();
   
-  // 7. 系统监控
+  // 8. 系统监控
   Serial.println("✅ 所有模块初始化完成！");
   Serial.println("════════════════════════════════════════");
   
-  // 8. 错误恢复（故障诊断和恢复）
+  // 9. 错误恢复（故障诊断和恢复）
   errorRecovery.begin();
   
-  // 9. OTA 固件升级（基于 WiFi）
+  // 10. OTA 固件升级（基于 WiFi）
   if (WiFi.status() == WL_CONNECTED) {
     String deviceName = String("esp32-c3-") + String(mqttManager.getDeviceId()).substring(0, 6);
     otaManager.begin(deviceName.c_str());

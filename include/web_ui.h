@@ -15,6 +15,7 @@ private:
   void handleGetConfig();
   void handleSetConfig();
   void handleGetStatus();
+  void handleGetTime();
   void handleRelayControl();
   void handleManualMode();
   void handleGetCondition();

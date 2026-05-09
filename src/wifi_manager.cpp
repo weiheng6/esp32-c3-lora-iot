@@ -5,7 +5,7 @@
 WiFiManager wifiManager;
 Preferences preferences;
 
-WiFiManager::WiFiManager() : configured(false), connecting(false), lastAttempt(0) {
+WiFiManager::WiFiManager() : configured(false), connecting(false), lastAttempt(0), ntpSynced(false), lastNtpSyncTime(0) {
   memset(ssid, 0, sizeof(ssid));
   memset(password, 0, sizeof(password));
 }
@@ -57,6 +57,9 @@ void WiFiManager::connect() {
         if (WiFi.getMode() & WIFI_AP) {
           WiFi.mode(WIFI_STA);
         }
+        
+        // WiFi连接成功后同步NTP时间
+        syncNtpTime();
       } else if (millis() - lastAttempt > CONNECTION_TIMEOUT) {
         Serial.println("❌ 连接超时");
         connecting = false;
@@ -128,4 +131,37 @@ void WiFiManager::saveConfig() {
   preferences.putBool("configured", configured);
   preferences.end();
   Serial.println("✅ WiFi 配置已保存");
+}
+
+void WiFiManager::syncNtpTime() {
+  if (ntpSynced && (millis() - lastNtpSyncTime < 3600000)) {
+    return;
+  }
+  
+  Serial.println("🌐 正在同步NTP时间...");
+  
+  configTime(8 * 3600, 0, "ntp.aliyun.com", "time.pool.aliyun.com", "cn.pool.ntp.org");
+  
+  struct tm timeinfo;
+  int retryCount = 0;
+  const int maxRetry = 10;
+  
+  while (retryCount < maxRetry) {
+    if (getLocalTime(&timeinfo)) {
+      ntpSynced = true;
+      lastNtpSyncTime = millis();
+      
+      char timeStr[64];
+      strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      Serial.printf("✅ NTP时间同步成功: %s (UTC+8)\n", timeStr);
+      Serial.printf("   服务器: ntp.aliyun.com / time.pool.aliyun.com\n");
+      return;
+    }
+    delay(500);
+    retryCount++;
+    Serial.printf("   NTP同步尝试 %d/%d...\n", retryCount, maxRetry);
+  }
+  
+  Serial.println("⚠️ NTP时间同步失败，将使用系统默认时间");
+  ntpSynced = false;
 }

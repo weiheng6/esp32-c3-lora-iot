@@ -1,6 +1,7 @@
 #include "condition_control.h"
 #include "relay_control.h"
 #include "log_manager.h"
+#include "ntp_client.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 
@@ -416,22 +417,36 @@ TimeSlot ConditionControl::getTimeSlot(uint8_t index) const {
 }
 
 bool ConditionControl::checkTimer() {
+  // 【调试】打印定时控制启用状态
+  LOG_DEBUGF("⏰ checkTimer() 调用 - timerEnabled=%s", timerEnabled ? "true" : "false");
+  
   if (!timerEnabled) {
+    LOG_DEBUG("⏰ 定时控制未启用，返回false");
     return false;
   }
   
-  // 获取当前时间
-  time_t now = time(nullptr);
-  struct tm* timeinfo = localtime(&now);
-  uint8_t currentHour = timeinfo->tm_hour;
-  uint8_t currentMinute = timeinfo->tm_min;
-  uint8_t currentSecond = timeinfo->tm_sec;
+  // 使用NTP客户端从阿里云服务器获取时间
+  struct tm timeinfo;
+  if (!ntpClient.getTime(&timeinfo, 1000)) {
+    static unsigned long lastTimeWarn = 0;
+    if (millis() - lastTimeWarn > 30000) {
+      lastTimeWarn = millis();
+      LOG_INFO("⚠️ 无法连接阿里云NTP服务器，定时控制将在网络恢复后生效");
+    }
+    LOG_DEBUG("⏰ NTP时间获取失败，保持继电器当前状态");
+    return relayControl.getState();
+  }
+  
+  uint8_t currentHour = timeinfo.tm_hour;
+  uint8_t currentMinute = timeinfo.tm_min;
+  uint8_t currentSecond = timeinfo.tm_sec;
   
   // 转换为分钟便于比较
   uint16_t currentTime = currentHour * 60 + currentMinute;
   
-  // 【新增】打印当前时间以便调试
-  LOG_DEBUGF("⏰ [当前时间: %02d:%02d:%02d] 开始检查定时器时间段", 
+  // 【新增】打印当前时间以便调试（显示完整日期）
+  LOG_DEBUGF("⏰ [阿里云NTP时间: %04d-%02d-%02d %02d:%02d:%02d] 开始检查定时器时间段", 
+             timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              currentHour, currentMinute, currentSecond);
   
   // 检查所有启用的时间段
@@ -448,14 +463,16 @@ bool ConditionControl::checkTimer() {
       
       // 处理跨越午夜的情况
       if (startTime <= endTime) {
-        if (currentTime >= startTime && currentTime < endTime) {
+        // 修复：使用 <= endTime，让时间段包含结束时间的最后一分钟
+        if (currentTime >= startTime && currentTime <= endTime) {
           LOG_TRIGGERF("✅ 当前时间在时间段[%d]内 - 继电器将%s", 
                      i, timeSlots[i].state ? "开启" : "关闭");
           return timeSlots[i].state;
         }
       } else {
         // 跨越午夜
-        if (currentTime >= startTime || currentTime < endTime) {
+        // 修复：使用 <= endTime，让时间段包含结束时间的最后一分钟
+        if (currentTime >= startTime || currentTime <= endTime) {
           LOG_TRIGGERF("✅ 当前时间在跨越午夜的时间段[%d]内 - 继电器将%s", 
                      i, timeSlots[i].state ? "开启" : "关闭");
           return timeSlots[i].state;
@@ -464,8 +481,9 @@ bool ConditionControl::checkTimer() {
     }
   }
   
-  LOG_DEBUG("⏰ 当前时间不在任何启用的时间段内 - 继电器将关闭");
-  return false;
+  // 【修复】当前时间不在任何启用的时间段内时，保持继电器当前状态而不是强制关闭
+  LOG_DEBUG("⏰ 当前时间不在任何启用的时间段内，保持继电器当前状态");
+  return relayControl.getState();
 }
 
 bool ConditionControl::checkAllConditions(float temperature, float humidity) {
@@ -494,18 +512,18 @@ String ConditionControl::getTimerJSON() const {
   
   JsonArray slots = doc.createNestedArray("slots");
   for (int i = 0; i < 8; i++) {
-    if (timeSlots[i].enabled) {
+    // 返回所有已配置的时间段（启用的或者有时间设置的）
+    bool hasTimeConfig = (timeSlots[i].startHour > 0 || timeSlots[i].startMinute > 0 || 
+                          timeSlots[i].endHour > 0 || timeSlots[i].endMinute > 0);
+    if (timeSlots[i].enabled || hasTimeConfig) {
       JsonObject slot = slots.createNestedObject();
       slot["index"] = i;
       slot["enabled"] = timeSlots[i].enabled;
-      
-      // 格式化时间为 HH:MM
-      char startTime[6], endTime[6];
-      snprintf(startTime, sizeof(startTime), "%02d:%02d", timeSlots[i].startHour, timeSlots[i].startMinute);
-      snprintf(endTime, sizeof(endTime), "%02d:%02d", timeSlots[i].endHour, timeSlots[i].endMinute);
-      
-      slot["start_time"] = startTime;
-      slot["end_time"] = endTime;
+      // 返回JavaScript期望的数字格式字段
+      slot["startHour"] = (int)timeSlots[i].startHour;
+      slot["startMinute"] = (int)timeSlots[i].startMinute;
+      slot["endHour"] = (int)timeSlots[i].endHour;
+      slot["endMinute"] = (int)timeSlots[i].endMinute;
       slot["state"] = timeSlots[i].state;
     }
   }

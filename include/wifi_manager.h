@@ -12,9 +12,12 @@ private:
   bool connecting;
   unsigned long lastAttempt;
   static const unsigned long CONNECTION_TIMEOUT = 10000;
+  bool ntpSynced;
+  unsigned long lastNtpSyncTime;
 
   void loadConfig();
   void saveConfig();
+  void syncNtpTime();
 
 public:
   WiFiManager();
@@ -23,6 +26,7 @@ public:
   void startAPMode();
   bool isConnected() const { return WiFi.status() == WL_CONNECTED; }
   bool isConfigured() const { return configured; }
+  bool isNtpSynced() const { return ntpSynced; }
   void setCredentials(const char* newSsid, const char* newPassword);
   void resetConfig();
   const char* getSSID() const { return ssid; }

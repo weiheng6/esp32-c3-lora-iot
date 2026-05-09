@@ -5,6 +5,7 @@
 #include "sensor.h"
 #include "condition_control.h"
 #include "ota_manager.h"
+#include "ntp_client.h"
 #include <ArduinoJson.h>
 #include <Update.h>
 
@@ -31,6 +32,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
     .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px 20px; text-align: center; }
     .header h1 { font-size: 28px; margin-bottom: 10px; }
     .header p { opacity: 0.9; font-size: 14px; }
+    .header .datetime { font-size: 16px; font-weight: 600; margin-top: 8px; opacity: 0.95; letter-spacing: 1px; }
     .content { padding: 30px; }
     .section { margin: 25px 0; padding: 20px; border-left: 4px solid #667eea; background: #f8f9fa; border-radius: 6px; }
     .section h2 { color: #333; font-size: 18px; margin-bottom: 15px; }
@@ -80,6 +82,7 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
     <div class="header">
       <h1>🔧 设备配置中心-New</h1>
       <p>ESP32-C3 环境监测和控制系统</p>
+      <div class="datetime" id="headerDateTime">📅 日期加载中... 🕐 时间加载中...</div>
     </div>
     
     <div class="content">
@@ -1065,12 +1068,35 @@ const char HTML_PAGE[] PROGMEM = R"rawliteral(
     // 每 5 秒自动刷新一次状态
     setInterval(refreshStatus, 5000);
     
-    // 更新时间显示
-    setInterval(() => {
-      const now = new Date();
-      document.getElementById('currentTime').textContent = 
-        `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-    }, 1000);
+    // 更新时间显示 - 从ESP32获取阿里云NTP同步后的时间
+    function updateServerTime() {
+      fetch(`${API_BASE}/api/time`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === 'ok' && data.synced) {
+            // 更新设置页面的时间显示
+            document.getElementById('currentTime').textContent =
+              `${String(data.hour).padStart(2, '0')}:${String(data.minute).padStart(2, '0')}:${String(data.second).padStart(2, '0')}`;
+
+            // 更新header公共区域的日期时间显示
+            document.getElementById('headerDateTime').textContent =
+              `📅 ${data.year}-${String(data.month).padStart(2, '0')}-${String(data.day).padStart(2, '0')} 🕐 ${String(data.hour).padStart(2, '0')}:${String(data.minute).padStart(2, '0')}:${String(data.second).padStart(2, '0')}`;
+          } else {
+            // 如果时间未同步，显示提示
+            document.getElementById('headerDateTime').textContent = '⏰ 时间同步中...';
+            document.getElementById('currentTime').textContent = '--:--:--';
+          }
+        })
+        .catch(e => {
+          console.error('获取服务器时间失败:', e);
+        });
+    }
+    
+    // 每秒更新一次时间
+    setInterval(updateServerTime, 1000);
+    
+    // 页面加载时立即获取一次时间
+    updateServerTime();
     
     // ============== OTA升级功能 ==============
     function switchOTA(mode) {
@@ -1198,6 +1224,7 @@ void WebUIManager::begin() {
   // 注册所有端点
   server.on("/", HTTP_GET, [this]() { this->handleRoot(); });
   server.on("/api/status", HTTP_GET, [this]() { this->handleGetStatus(); });
+  server.on("/api/time", HTTP_GET, [this]() { this->handleGetTime(); });
   server.on("/api/config", HTTP_GET, [this]() { this->handleGetConfig(); });
   server.on("/api/config", HTTP_POST, [this]() { this->handleSetConfig(); });
   server.on("/api/relay", HTTP_POST, [this]() { this->handleRelayControl(); });
@@ -1659,7 +1686,18 @@ void WebUIManager::handleSetCondition() {
 
 // ==================== 定时控制 API 端点 ====================
 void WebUIManager::handleGetTimer() {
-  String json = conditionControl.getTimerJSON();
+  // 解析getTimerJSON返回的内容，包装成Web UI期望的格式
+  StaticJsonDocument<550> wrapperDoc;
+  String timerJson = conditionControl.getTimerJSON();
+  
+  StaticJsonDocument<500> timerDoc;
+  deserializeJson(timerDoc, timerJson);
+  
+  // 包装成 { timer: { ... } } 格式
+  wrapperDoc["timer"] = timerDoc.as<JsonObject>();
+  
+  String json;
+  serializeJson(wrapperDoc, json);
   server.send(200, "application/json", json);
 }
 
@@ -1710,4 +1748,42 @@ void WebUIManager::handleSetTimer() {
   }
   
   server.send(200, "application/json", conditionControl.getTimerJSON());
+}
+
+// ==================== 获取服务器时间 API 端点 ====================
+void WebUIManager::handleGetTime() {
+  StaticJsonDocument<150> doc;
+  
+  // 使用NTP客户端从阿里云NTP服务器获取时间
+  struct tm timeinfo;
+  if (ntpClient.getTime(&timeinfo, 2000)) {
+    doc["status"] = "ok";
+    doc["synced"] = true;
+    
+    // 使用set()方法确保即使值为0也会输出字段
+    doc["year"].set((int)(timeinfo.tm_year + 1900));
+    doc["month"].set((int)(timeinfo.tm_mon + 1));
+    doc["day"].set((int)timeinfo.tm_mday);
+    doc["hour"].set((int)timeinfo.tm_hour);
+    doc["minute"].set((int)timeinfo.tm_min);
+    doc["second"].set((int)timeinfo.tm_sec);
+    doc["source"] = "ntp.aliyun.com";
+    
+    char timeStr[64];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    doc["datetime"] = timeStr;
+    
+    Serial.printf("🌐 从阿里云NTP获取时间: %s\n", timeStr);
+  } else {
+    doc["status"] = "error";
+    doc["message"] = "无法连接阿里云NTP服务器";
+    doc["synced"] = false;
+    doc["source"] = "none";
+    
+    Serial.println("❌ NTP时间获取失败");
+  }
+  
+  String json;
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
 }
