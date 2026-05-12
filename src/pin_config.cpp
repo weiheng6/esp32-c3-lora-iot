@@ -258,6 +258,14 @@ std::vector<PinConfig*> PinConfigManager::getPinsByFunction(PinFunction func) {
   return result;
 }
 
+std::vector<PinConfig*> PinConfigManager::getAllPinConfigs() {
+  std::vector<PinConfig*> result;
+  for (auto& config : pinConfigs) {
+    result.push_back(&config);
+  }
+  return result;
+}
+
 bool PinConfigManager::isPinOccupied(uint8_t pin, PinFunction func) {
   auto it = std::find_if(pinConfigs.begin(), pinConfigs.end(),
     [pin, func](const PinConfig& pc) { 

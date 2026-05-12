@@ -45,6 +45,9 @@ private:
   void handleSetSystemConfig();
   void handleGetTransmissionMode();
   void handleSetTransmissionMode();
+  void handleGetMqttProtoMode();
+  void handleSetMqttProtoMode();
+  void handleScanWiFi();
   
 public:
   WebUIManager(uint16_t port = 80);

@@ -14,10 +14,13 @@ private:
   static const unsigned long CONNECTION_TIMEOUT = 10000;
   bool ntpSynced;
   unsigned long lastNtpSyncTime;
-
+  bool configUpdated;  // 标记配置是否已更新，用于触发立即连接
+  bool apModeActive;   // 标记AP模式是否激活
+  
   void loadConfig();
   void saveConfig();
   void syncNtpTime();
+  void ensureAPMode(bool enable);  // 智能控制AP模式开关
 
 public:
   WiFiManager();
@@ -27,6 +30,7 @@ public:
   bool isConnected() const { return WiFi.status() == WL_CONNECTED; }
   bool isConfigured() const { return configured; }
   bool isNtpSynced() const { return ntpSynced; }
+  bool isAPModeActive() const { return apModeActive; }
   void setCredentials(const char* newSsid, const char* newPassword);
   void resetConfig();
   const char* getSSID() const { return ssid; }

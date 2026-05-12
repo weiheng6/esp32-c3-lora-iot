@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include "config.h"
+#include "config_api.h"
 #include "log_manager.h"
 #include "sensor.h"
 #include "wifi_manager.h"
@@ -16,6 +17,7 @@
 #include "ota_manager.h"
 #include "error_recovery.h"
 #include "ntp_client.h"
+#include "pin_config.h"
 
 // ==================== 全局常量定义 ====================
 const char* MQTT_SERVER = "iot.kebaidata.com";
@@ -362,9 +364,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       conditionControl.setHumiCondition(humiEnabled, humiHigh, COMPARE_GREATER_THAN);
       
       // 【关键修复】同时设置新的条件组，确保条件检查能生效
+      // ON条件组：温度>高温阈值 或 湿度>高阈值 时开启
       conditionControl.setCondition(true, 0, tempEnabled, SENSOR_TEMP, COMPARE_GREATER_THAN, tempHigh);
       conditionControl.setCondition(true, 1, humiEnabled, SENSOR_HUMI, COMPARE_GREATER_THAN, humiHigh);
       conditionControl.setConditionGroupLogic(true, LOGIC_OR);  // 滞回模式使用 OR 逻辑
+      
+      // OFF条件组：温度<低温阈值 或 湿度<低阈值 时关闭
+      conditionControl.setCondition(false, 0, tempEnabled, SENSOR_TEMP, COMPARE_LESS_THAN, tempLow);
+      conditionControl.setCondition(false, 1, humiEnabled, SENSOR_HUMI, COMPARE_LESS_THAN, humiLow);
+      conditionControl.setConditionGroupLogic(false, LOGIC_OR);  // 滞回模式使用 OR 逻辑
+      conditionControl.setConditionGroupEnabled(false, true);  // 启用OFF条件组
       
       // 如果有任何条件启用，启用 ON 条件组
       if (tempEnabled || humiEnabled) {
@@ -712,6 +721,9 @@ void setup() {
   // 初始化各模块
   Serial.println("🔄 初始化模块...");
   
+  // 0. ConfigAPI (必须先初始化，因为它会与 WiFiManager 同步配置)
+  configAPI.begin();
+  
   // 1. 传感器
   sensorManager.begin();
   
@@ -731,10 +743,13 @@ void setup() {
   // 6. 继电器
   relayControl.begin();
   
-  // 7. 条件控制
+  // 7. 引脚配置管理（必须在LoRa和传感器初始化之前，以便正确配置GPIO）
+  pinConfigManager.begin();
+  
+  // 8. 条件控制
   conditionControl.begin();
   
-  // 8. 系统监控
+  // 9. 系统监控
   Serial.println("✅ 所有模块初始化完成！");
   Serial.println("════════════════════════════════════════");
   
@@ -747,15 +762,11 @@ void setup() {
     otaManager.begin(deviceName.c_str());
   }
   
-  // 10. 增强的 Web UI（在 WiFi 连接后才启动，用于内网管理）
-  // 注意：webServerManager 在 WiFi 未配置时由 wifiManager 启动，用于配置 WiFi
-  // 这里的 webUIManager 在 WiFi 连接后启动，提供高级功能
-  if (WiFi.status() == WL_CONNECTED) {
-    webUIManager.begin();
-    Serial.printf("✅ Web UI 已启动 - 访问地址：http://%s\n", WiFi.localIP().toString().c_str());
-  } else {
-    Serial.println("📌 WiFi 未连接，Web UI 将在连接后启动");
-  }
+  // 10. 增强的 Web UI（统一使用完整的WebUI，支持AP模式和Station模式）
+  // 无论WiFi是否连接，都使用webUIManager提供完整的配置界面
+  webUIManager.begin();
+  Serial.printf("✅ Web UI 已启动 - 访问地址：http://%s\n", 
+    (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString().c_str() : "192.168.4.1");
   
   Serial.println("🎉 固件初始化完成！");
 }
@@ -806,8 +817,7 @@ void loop() {
   // MQTT 循环
   mqttManager.loop();
   
-  // 处理 HTTP 请求
-  webServerManager.handleClient();
+  // 处理 HTTP 请求（统一使用webUIManager）
   webUIManager.handleClient();
   
   // 处理 LoRa 消息和队列

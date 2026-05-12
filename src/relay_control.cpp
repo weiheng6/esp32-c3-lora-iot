@@ -1,5 +1,6 @@
 #include "relay_control.h"
 #include "log_manager.h"
+#include "pin_config.h"
 #include <Preferences.h>
 
 RelayControl relayControl;
@@ -11,6 +12,11 @@ void RelayControl::begin() {
   pinMode(RELAY_PIN, OUTPUT);
   loadState();
   digitalWrite(RELAY_PIN, state);
+  
+  // 更新继电器引脚的初始化状态
+  PinConfig* relayConfig = pinConfigManager.getPinConfig(RELAY_PIN);
+  if (relayConfig) relayConfig->isInitialized = true;
+  
   LOG_DEBUG("继电器初始化成功");
 }
 

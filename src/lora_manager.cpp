@@ -1,4 +1,5 @@
 #include "lora_manager.h"
+#include "pin_config.h"
 
 LoRaManager loraManager;
 
@@ -21,6 +22,18 @@ bool LoRaManager::begin() {
   LoRa.setPreambleLength(8);
   LoRa.setSyncWord(0x12);
   LoRa.enableCrc();
+  
+  // 更新LoRa相关引脚的初始化状态
+  PinConfig* sckConfig = pinConfigManager.getPinConfig(LORA_SCK);
+  if (sckConfig) sckConfig->isInitialized = true;
+  PinConfig* misoConfig = pinConfigManager.getPinConfig(LORA_MISO);
+  if (misoConfig) misoConfig->isInitialized = true;
+  PinConfig* mosiConfig = pinConfigManager.getPinConfig(LORA_MOSI);
+  if (mosiConfig) mosiConfig->isInitialized = true;
+  PinConfig* nssConfig = pinConfigManager.getPinConfig(LORA_NSS);
+  if (nssConfig) nssConfig->isInitialized = true;
+  PinConfig* resetConfig = pinConfigManager.getPinConfig(LORA_RESET);
+  if (resetConfig) resetConfig->isInitialized = true;
   
   Serial.println("✅ LoRa 模块初始化成功！");
   return true;

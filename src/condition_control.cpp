@@ -350,10 +350,17 @@ bool ConditionControl::checkConditions(float temperature, float humidity) {
 }
 
 String ConditionControl::toJSON() const {
-  StaticJsonDocument<600> doc;
+  StaticJsonDocument<800> doc;
   doc["enabled"] = enabled;
   
-  // 【新增】返回灵活条件配置
+  // 返回滞回模式信息
+  doc["use_hysteresis"] = useHysteresis;
+  doc["temp_high_threshold"] = tempHighThreshold;
+  doc["temp_low_threshold"] = tempLowThreshold;
+  doc["humi_high_threshold"] = humiHighThreshold;
+  doc["humi_low_threshold"] = humiLowThreshold;
+  
+  // 返回灵活条件配置
   doc["on_condition"]["enabled"] = onConditionGroup.enabled;
   doc["on_condition"]["logic"] = onConditionGroup.logicMode == LOGIC_AND ? "and" : "or";
   doc["on_condition"]["count"] = onConditionGroup.conditionCount;
@@ -365,6 +372,16 @@ String ConditionControl::toJSON() const {
     cond["sensor"] = onConditionGroup.conditions[i].sensorType == SENSOR_TEMP ? "temp" : "humi";
     cond["compare"] = onConditionGroup.conditions[i].compareOp;
     cond["threshold"] = onConditionGroup.conditions[i].threshold;
+    // 滞回模式下返回高低阈值
+    if (useHysteresis) {
+      if (onConditionGroup.conditions[i].sensorType == SENSOR_TEMP) {
+        cond["high_threshold"] = tempHighThreshold;
+        cond["low_threshold"] = tempLowThreshold;
+      } else {
+        cond["high_threshold"] = humiHighThreshold;
+        cond["low_threshold"] = humiLowThreshold;
+      }
+    }
   }
   
   doc["off_condition"]["enabled"] = offConditionGroup.enabled;
@@ -378,6 +395,16 @@ String ConditionControl::toJSON() const {
     cond["sensor"] = offConditionGroup.conditions[i].sensorType == SENSOR_TEMP ? "temp" : "humi";
     cond["compare"] = offConditionGroup.conditions[i].compareOp;
     cond["threshold"] = offConditionGroup.conditions[i].threshold;
+    // 滞回模式下返回高低阈值
+    if (useHysteresis) {
+      if (offConditionGroup.conditions[i].sensorType == SENSOR_TEMP) {
+        cond["high_threshold"] = tempHighThreshold;
+        cond["low_threshold"] = tempLowThreshold;
+      } else {
+        cond["high_threshold"] = humiHighThreshold;
+        cond["low_threshold"] = humiLowThreshold;
+      }
+    }
   }
   
   String result;
@@ -419,12 +446,12 @@ TimeSlot ConditionControl::getTimeSlot(uint8_t index) const {
 bool ConditionControl::checkTimer() {
   // 【调试】打印定时控制启用状态
   LOG_DEBUGF("⏰ checkTimer() 调用 - timerEnabled=%s", timerEnabled ? "true" : "false");
-  
+
   if (!timerEnabled) {
     LOG_DEBUG("⏰ 定时控制未启用，返回false");
     return false;
   }
-  
+
   // 使用NTP客户端从阿里云服务器获取时间
   struct tm timeinfo;
   if (!ntpClient.getTime(&timeinfo, 1000)) {
@@ -436,54 +463,82 @@ bool ConditionControl::checkTimer() {
     LOG_DEBUG("⏰ NTP时间获取失败，保持继电器当前状态");
     return relayControl.getState();
   }
-  
+
   uint8_t currentHour = timeinfo.tm_hour;
   uint8_t currentMinute = timeinfo.tm_min;
   uint8_t currentSecond = timeinfo.tm_sec;
-  
+
   // 转换为分钟便于比较
   uint16_t currentTime = currentHour * 60 + currentMinute;
-  
+
   // 【新增】打印当前时间以便调试（显示完整日期）
-  LOG_DEBUGF("⏰ [阿里云NTP时间: %04d-%02d-%02d %02d:%02d:%02d] 开始检查定时器时间段", 
+  LOG_DEBUGF("⏰ [阿里云NTP时间: %04d-%02d-%02d %02d:%02d:%02d] 开始检查定时器时间段",
              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              currentHour, currentMinute, currentSecond);
-  
+
+  bool inAnySlot = false;
+
   // 检查所有启用的时间段
   for (int i = 0; i < 8; i++) {
     if (timeSlots[i].enabled) {
       uint16_t startTime = timeSlots[i].startHour * 60 + timeSlots[i].startMinute;
       uint16_t endTime = timeSlots[i].endHour * 60 + timeSlots[i].endMinute;
-      
+
       // 【新增】打印时间段信息用于调试
-      LOG_DEBUGF("  🕐 检查时间段[%d]: %02d:%02d ~ %02d:%02d (目标状态:%s)", 
-                 i, timeSlots[i].startHour, timeSlots[i].startMinute, 
+      LOG_DEBUGF("  🕐 检查时间段[%d]: %02d:%02d ~ %02d:%02d (目标状态:%s)",
+                 i, timeSlots[i].startHour, timeSlots[i].startMinute,
                  timeSlots[i].endHour, timeSlots[i].endMinute,
                  timeSlots[i].state ? "开启" : "关闭");
-      
+
       // 处理跨越午夜的情况
       if (startTime <= endTime) {
-        // 修复：使用 <= endTime，让时间段包含结束时间的最后一分钟
-        if (currentTime >= startTime && currentTime <= endTime) {
-          LOG_TRIGGERF("✅ 当前时间在时间段[%d]内 - 继电器将%s", 
+        // 不跨越午夜：时间段为 [startTime, endTime)
+        // 即 startTime <= currentTime < endTime
+        // 当 currentTime >= endTime 时，离开时间段，关闭继电器
+        if (currentTime >= startTime && currentTime < endTime) {
+          LOG_TRIGGERF("✅ 当前时间在时间段[%d]内 - 继电器将%s",
                      i, timeSlots[i].state ? "开启" : "关闭");
+          inAnySlot = true;
           return timeSlots[i].state;
         }
       } else {
-        // 跨越午夜
-        // 修复：使用 <= endTime，让时间段包含结束时间的最后一分钟
-        if (currentTime >= startTime || currentTime <= endTime) {
-          LOG_TRIGGERF("✅ 当前时间在跨越午夜的时间段[%d]内 - 继电器将%s", 
+        // 跨越午夜：时间段为 [startTime, 24:00) U [00:00, endTime)
+        if (currentTime >= startTime || currentTime < endTime) {
+          LOG_TRIGGERF("✅ 当前时间在跨越午夜的时间段[%d]内 - 继电器将%s",
                      i, timeSlots[i].state ? "开启" : "关闭");
+          inAnySlot = true;
           return timeSlots[i].state;
         }
       }
     }
   }
-  
-  // 【修复】当前时间不在任何启用的时间段内时，保持继电器当前状态而不是强制关闭
-  LOG_DEBUG("⏰ 当前时间不在任何启用的时间段内，保持继电器当前状态");
-  return relayControl.getState();
+
+  // 时间段外：默认关闭继电器（除非所有时间段都是"关闭"类型）
+  // 这样保证：
+  // 1. 16:27-16:29 开启 -> 16:27-16:29 开启，16:29后关闭
+  // 2. 16:27-16:29 关闭 -> 16:27-16:29 关闭，16:29后保持关闭
+  if (!inAnySlot) {
+    // 检查是否有任何启用的时间段
+    bool hasAnyEnabledSlot = false;
+    for (int i = 0; i < 8; i++) {
+      if (timeSlots[i].enabled) {
+        hasAnyEnabledSlot = true;
+        break;
+      }
+    }
+    
+    if (hasAnyEnabledSlot) {
+      // 有时间段但当前不在任何时间段内 -> 关闭继电器
+      LOG_DEBUG("⏰ 当前时间不在任何时间段内 - 继电器关闭");
+      return false;
+    }
+    
+    // 没有启用时间段 -> 返回当前状态，不改变继电器
+    LOG_DEBUG("⏰ 没有启用任何时间段 - 保持继电器当前状态");
+    return relayControl.getState();
+  }
+
+  return false;
 }
 
 bool ConditionControl::checkAllConditions(float temperature, float humidity) {
@@ -507,7 +562,7 @@ bool ConditionControl::checkAllConditions(float temperature, float humidity) {
 }
 
 String ConditionControl::getTimerJSON() const {
-  StaticJsonDocument<500> doc;
+  StaticJsonDocument<2048> doc;
   doc["enabled"] = timerEnabled;
   
   JsonArray slots = doc.createNestedArray("slots");

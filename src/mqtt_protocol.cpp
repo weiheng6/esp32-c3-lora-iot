@@ -1,6 +1,7 @@
 #include "mqtt_protocol.h"
 #include <WiFi.h>
 #include <functional>
+#include <Preferences.h>
 
 ProtobufCodec protoCodec(256);
 MQTTProtocol mqttProtocol;
@@ -20,6 +21,19 @@ MQTTProtocol::MQTTProtocol()
 }
 
 void MQTTProtocol::begin() {
+    Preferences prefs;
+    prefs.begin("mqtt_proto", true);
+    uint8_t savedMode = prefs.getUChar("mode", 0);
+    prefs.end();
+    
+    if (savedMode == 1) {
+        currentMode = TransmissionMode::PROTOBUF_MODE;
+        Serial.println("[MQTTProtocol] Loaded saved PROTOBUF mode");
+    } else {
+        currentMode = TransmissionMode::JSON_MODE;
+        Serial.println("[MQTTProtocol] Using default JSON mode");
+    }
+    
     uint8_t mac[6];
     WiFi.macAddress(mac);
     snprintf(deviceId, sizeof(deviceId), "%02X%02X%02X%02X%02X%02X",
@@ -101,7 +115,12 @@ void MQTTProtocol::setMode(TransmissionMode mode) {
     TransmissionMode oldMode = currentMode;
     currentMode = mode;
     
-    Serial.printf("[MQTTProtocol] Mode switch: %s -> %s\n",
+    Preferences prefs;
+    prefs.begin("mqtt_proto", false);
+    prefs.putUChar("mode", mode == TransmissionMode::PROTOBUF_MODE ? 1 : 0);
+    prefs.end();
+    
+    Serial.printf("[MQTTProtocol] Mode switch: %s -> %s (saved to flash)\n",
                  oldMode == TransmissionMode::JSON_MODE ? "JSON" : "Protobuf",
                  mode == TransmissionMode::JSON_MODE ? "JSON" : "Protobuf");
     

@@ -6,6 +6,11 @@
 #include "mqtt_manager.h"
 #include "wifi_manager.h"
 
+// 声明外部的 WiFiManager 实例
+extern WiFiManager wifiManager;
+
+extern PinConfigManager pinConfigManager;
+
 ConfigAPI* ConfigAPI::instance = nullptr;
 
 ConfigAPI::ConfigAPI() {
@@ -25,6 +30,19 @@ bool ConfigAPI::begin() {
     loadLoraConfig();
     loadPowerConfig();
     loadPinConfig();
+    
+    // 启动时同步 WiFi 配置：如果 ConfigAPI 有配置而 WiFiManager 没有，同步过去
+    if (strlen(networkConfig.wifiSsid) > 0 && !wifiManager.isConfigured()) {
+        Serial.printf("[ConfigAPI] 同步 WiFi 配置到 WiFiManager: %s\n", networkConfig.wifiSsid);
+        wifiManager.setCredentials(networkConfig.wifiSsid, networkConfig.wifiPassword);
+    }
+    // 反之，如果 WiFiManager 有配置而 ConfigAPI 没有，同步到 ConfigAPI
+    else if (strlen(wifiManager.getSSID()) > 0 && strlen(networkConfig.wifiSsid) == 0) {
+        Serial.printf("[ConfigAPI] 从 WiFiManager 同步 WiFi 配置: %s\n", wifiManager.getSSID());
+        strncpy(networkConfig.wifiSsid, wifiManager.getSSID(), sizeof(networkConfig.wifiSsid) - 1);
+        strncpy(networkConfig.wifiPassword, wifiManager.getPassword(), sizeof(networkConfig.wifiPassword) - 1);
+        saveNetworkConfig();
+    }
 
     Serial.println("[ConfigAPI] Configuration API initialized");
     return true;
@@ -210,6 +228,17 @@ String ConfigAPI::networkConfigToJson() const {
     doc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
     doc["mqttConnected"] = mqttManager.isConnected();
     
+    // 添加AP模式和IP地址信息
+    bool isAPMode = WiFi.getMode() & WIFI_AP;
+    doc["isAPMode"] = isAPMode;
+    if (isAPMode) {
+        doc["apIP"] = WiFi.softAPIP().toString();
+        doc["apSSID"] = AP_SSID;
+        doc["stationIP"] = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "";
+    } else {
+        doc["stationIP"] = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "";
+    }
+    
     String output;
     serializeJson(doc, output);
     return output;
@@ -255,16 +284,18 @@ String ConfigAPI::powerConfigToJson() const {
 
 String ConfigAPI::pinConfigToJson() const {
     StaticJsonDocument<1024> doc;
-    JsonArray pins = doc.createNestedArray("pins");
+    JsonArray pins = doc.to<JsonArray>();
     
-    for (int i = 0; i < 20; i++) {
+    std::vector<PinConfig*> allConfigs = pinConfigManager.getAllPinConfigs();
+    for (const auto& cfg : allConfigs) {
         JsonObject pin = pins.createNestedObject();
-        pin["pin"] = i;
-        pin["mode"] = pinConfigs[i].mode;
-        pin["function"] = pinConfigs[i].function;
-        pin["functionName"] = pinConfigs[i].functionName;
-        pin["initialValue"] = pinConfigs[i].initialValue;
-        pin["isReserved"] = pinConfigs[i].isReserved;
+        pin["pin"] = cfg->pinNumber;
+        pin["mode"] = cfg->mode;
+        pin["function"] = cfg->function;
+        pin["functionName"] = cfg->functionName;
+        pin["initialValue"] = cfg->initialValue;
+        pin["isReserved"] = cfg->isReserved;
+        pin["isInitialized"] = cfg->isInitialized;
     }
     
     String output;
@@ -358,10 +389,42 @@ String ConfigAPI::getNetworkConfig() const {
 }
 
 bool ConfigAPI::setNetworkConfig(const String& json) {
+    // 先记录旧的 WiFi 配置，用于判断是否需要重新连接
+    String oldWifiSsid = networkConfig.wifiSsid;
+    String oldWifiPassword = networkConfig.wifiPassword;
+    
     if (!parseNetworkConfig(json)) {
         return false;
     }
-    return saveNetworkConfig();
+    
+    // 保存到 ConfigAPI 的存储
+    if (!saveNetworkConfig()) {
+        return false;
+    }
+    
+    // 检查 WiFi 配置是否有变化
+    bool wifiConfigChanged = 
+        (String(networkConfig.wifiSsid) != oldWifiSsid) || 
+        (String(networkConfig.wifiPassword) != oldWifiPassword);
+    
+    // 如果 WiFi 配置有变化，同步到 WiFiManager 并尝试连接
+    if (wifiConfigChanged && strlen(networkConfig.wifiSsid) > 0) {
+        Serial.printf("🔄 WiFi配置已更新 - 新SSID: %s\n", networkConfig.wifiSsid);
+        wifiManager.setCredentials(networkConfig.wifiSsid, networkConfig.wifiPassword);
+        
+        // 断开当前连接（如果有的话）
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("🔄 断开当前WiFi连接...");
+            WiFi.disconnect(true);
+            delay(100);
+        }
+        
+        // 尝试连接新WiFi
+        Serial.println("🔄 尝试连接新的WiFi...");
+        // 注意：WiFi 连接会在主循环的 checkNetworkConnection 中处理
+    }
+    
+    return true;
 }
 
 bool ConfigAPI::parseNetworkConfig(const String& json) {

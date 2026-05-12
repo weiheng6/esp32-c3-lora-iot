@@ -1,11 +1,16 @@
 #include "wifi_manager.h"
 #include "config.h"
 #include "web_server.h"
+#include "web_ui.h"
+#include "config_api.h"
+
+extern WebUIManager webUIManager;
+extern ConfigAPI configAPI;
 
 WiFiManager wifiManager;
 Preferences preferences;
 
-WiFiManager::WiFiManager() : configured(false), connecting(false), lastAttempt(0), ntpSynced(false), lastNtpSyncTime(0) {
+WiFiManager::WiFiManager() : configured(false), connecting(false), lastAttempt(0), ntpSynced(false), lastNtpSyncTime(0), configUpdated(false), apModeActive(false) {
   memset(ssid, 0, sizeof(ssid));
   memset(password, 0, sizeof(password));
 }
@@ -31,7 +36,7 @@ void WiFiManager::connect() {
     if (!connecting) {
       if (strlen(ssid) == 0 || !configured) {
         Serial.println("🔄 WiFi 未配置，启动 AP 模式...");
-        startAPMode();
+        ensureAPMode(true);
         return;
       }
       
@@ -54,8 +59,13 @@ void WiFiManager::connect() {
         preferences.putString("local_ip", localIP.toString());
         preferences.end();
         
-        if (WiFi.getMode() & WIFI_AP) {
-          WiFi.mode(WIFI_STA);
+        // WiFi连接成功，关闭AP模式节省电量
+        ensureAPMode(false);
+        
+        // 如果是通过AP配置的新WiFi，输出提示
+        if (configUpdated) {
+          Serial.println("🎉 WiFi配置成功！设备已从AP模式切换到Station模式");
+          configUpdated = false;
         }
         
         // WiFi连接成功后同步NTP时间
@@ -64,14 +74,17 @@ void WiFiManager::connect() {
         Serial.println("❌ 连接超时");
         connecting = false;
         Serial.println("🔄 WiFi 连接失败，启动 AP 模式...");
-        startAPMode();
+        ensureAPMode(true);
       } else if (WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_NO_SSID_AVAIL) {
         Serial.println("❌ 连接失败");
         connecting = false;
         Serial.println("🔄 启动 AP 模式...");
-        startAPMode();
+        ensureAPMode(true);
       }
     }
+  } else {
+    // WiFi已连接，确保AP模式关闭
+    ensureAPMode(false);
   }
 }
 
@@ -87,14 +100,30 @@ void WiFiManager::startAPMode() {
   Serial.println(AP_PASSWORD);
   Serial.println("🌐 然后在浏览器中访问：http://192.168.4.1");
   
-  webServerManager.begin();
+  // 使用统一的 WebUI，无论是否已配置 WiFi
+  // 这样 AP 模式也能使用完整的仪表盘、配网、定时控制等功能
+  webUIManager.begin();
 }
 
 void WiFiManager::setCredentials(const char* newSsid, const char* newPassword) {
   snprintf(ssid, sizeof(ssid), "%s", newSsid);
   snprintf(password, sizeof(password), "%s", newPassword);
   configured = true;
+  configUpdated = true;  // 设置配置更新标志，触发立即连接
   saveConfig();
+  
+  // 如果当前在AP模式，立即尝试连接新配置的WiFi
+  if (WiFi.getMode() & WIFI_AP && strlen(ssid) > 0) {
+    Serial.printf("📡 检测到WiFi配置更新，立即尝试连接: %s\n", ssid);
+    // 断开当前连接（如果有的话）
+    if (WiFi.status() == WL_CONNECTED) {
+      WiFi.disconnect(true);
+      delay(50);
+    }
+    WiFi.begin(ssid, password);
+    connecting = true;
+    lastAttempt = millis();
+  }
 }
 
 void WiFiManager::resetConfig() {
@@ -107,6 +136,10 @@ void WiFiManager::resetConfig() {
   preferences.remove("password");
   preferences.putBool("configured", false);
   preferences.end();
+  
+  // 同时清除 ConfigAPI 中的 WiFi 配置
+  Serial.println("🔄 同时清除 ConfigAPI 中的 WiFi 配置...");
+  configAPI.setNetworkConfig("{\"wifiSsid\":\"\",\"wifiPassword\":\"\"}");
   
   Serial.println("✅ WiFi 配置已重置");
 }
@@ -164,4 +197,36 @@ void WiFiManager::syncNtpTime() {
   
   Serial.println("⚠️ NTP时间同步失败，将使用系统默认时间");
   ntpSynced = false;
+}
+
+/**
+ * @brief 智能控制AP模式开关
+ * @param enable true=开启AP模式, false=关闭AP模式
+ */
+void WiFiManager::ensureAPMode(bool enable) {
+  bool currentAP = WiFi.getMode() & WIFI_AP;
+  
+  if (enable && !currentAP) {
+    // 需要开启AP模式
+    Serial.println("🔄 开启AP模式...");
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    apModeActive = true;
+    Serial.print("📶 AP 已启动，IP 地址：");
+    Serial.println(WiFi.softAPIP());
+    Serial.print("📱 请连接 WiFi：");
+    Serial.println(AP_SSID);
+    Serial.print("🔑 密码：");
+    Serial.println(AP_PASSWORD);
+    Serial.println("🌐 然后在浏览器中访问：http://192.168.4.1");
+    
+    // 启动WebUI
+    webUIManager.begin();
+  } else if (!enable && currentAP) {
+    // 需要关闭AP模式
+    Serial.println("🔋 关闭AP模式以节省电量...");
+    WiFi.mode(WIFI_STA);
+    apModeActive = false;
+    Serial.println("✅ AP模式已关闭");
+  }
 }
